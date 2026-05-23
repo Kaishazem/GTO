@@ -1,0 +1,230 @@
+import { useState, useMemo } from "react";
+import { useTask } from "@/contexts/TaskContext";
+import { useAuth } from "@/contexts/AuthContext";
+import { formatCurrency, userReward } from "@/lib/utils";
+import { useToast } from "@/hooks/use-toast";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { ExternalLink, CheckCircle, Loader2, Zap, Star } from "lucide-react";
+import { cn } from "@/lib/utils";
+
+export default function TasksPage() {
+  const { tasks, completions, completeTask, hasMore, loadMoreTasks, loadingMore, loading } = useTask();
+  const { profile } = useAuth();
+  const { toast } = useToast();
+  const [filter, setFilter] = useState<"all" | "simple" | "premium">("all");
+  const [platformFilter, setPlatformFilter] = useState<string>("all");
+  const [completing, setCompleting] = useState<string | null>(null);
+
+  const completedIds = new Set(completions.map((c) => c.taskId));
+
+  const platforms = useMemo(() => {
+    const set = new Set(tasks.map((t) => t.platform).filter(Boolean));
+    return Array.from(set).sort();
+  }, [tasks]);
+
+  const filtered = tasks.filter((t) => {
+    const typeMatch = filter === "all" || t.type === filter;
+    const platformMatch = platformFilter === "all" || t.platform === platformFilter;
+    return typeMatch && platformMatch;
+  });
+
+  async function handleComplete(taskId: string, url: string) {
+    setCompleting(taskId);
+    try {
+      window.open(url, "_blank");
+      await new Promise((r) => setTimeout(r, 2000));
+      await completeTask(taskId);
+      toast({ title: "✅ Done!", description: "Task submitted — pending verification" });
+    } catch (e: unknown) {
+      toast({ title: "Error", description: e instanceof Error ? e.message : "Something went wrong", variant: "destructive" });
+    } finally {
+      setCompleting(null);
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-white">Available Tasks</h1>
+          <p className="text-white/50 text-sm mt-1">Complete tasks and earn USDT</p>
+        </div>
+        <div className="text-right">
+          <div className="text-2xl font-bold text-emerald-400">{completions.length}</div>
+          <div className="text-xs text-white/40">total completed</div>
+        </div>
+      </div>
+
+      {/* Type Filters */}
+      <div className="flex gap-2 flex-wrap">
+        {(["all", "simple", "premium"] as const).map((f) => (
+          <button
+            key={f}
+            onClick={() => setFilter(f)}
+            data-testid={`filter-${f}`}
+            className={cn(
+              "px-4 py-2 rounded-xl text-sm font-medium transition-all",
+              filter === f
+                ? "bg-emerald-500 text-white"
+                : "bg-white/5 text-white/60 hover:bg-white/10 hover:text-white"
+            )}
+          >
+            {f === "all"
+              ? `All (${tasks.length})`
+              : f === "simple"
+              ? `⚡ Simple (${tasks.filter((t) => t.type === "simple").length})`
+              : `⭐ Premium (${tasks.filter((t) => t.type === "premium").length})`}
+          </button>
+        ))}
+      </div>
+
+      {/* Platform Filters */}
+      {platforms.length > 0 && (
+        <div className="flex gap-2 flex-wrap">
+          <button
+            onClick={() => setPlatformFilter("all")}
+            className={cn(
+              "px-3 py-1.5 rounded-lg text-xs font-medium transition-all",
+              platformFilter === "all"
+                ? "bg-blue-500/30 text-blue-200 border border-blue-500/40"
+                : "bg-white/5 text-white/50 hover:bg-white/10 border border-transparent"
+            )}
+          >
+            All Platforms
+          </button>
+          {platforms.map((p) => (
+            <button
+              key={p}
+              onClick={() => setPlatformFilter(p)}
+              className={cn(
+                "px-3 py-1.5 rounded-lg text-xs font-medium transition-all",
+                platformFilter === p
+                  ? "bg-blue-500/30 text-blue-200 border border-blue-500/40"
+                  : "bg-white/5 text-white/50 hover:bg-white/10 border border-transparent"
+              )}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Tasks */}
+      {loading ? (
+        <div className="flex justify-center py-16">
+          <Loader2 className="w-8 h-8 animate-spin text-emerald-400" />
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="text-center py-16 text-white/40">
+          <div className="w-16 h-16 mx-auto mb-2 rounded-2xl bg-white/5 flex items-center justify-center">
+            <span className="text-3xl">📋</span>
+          </div>
+          <p className="mt-3">No tasks available right now</p>
+          <p className="text-xs mt-1">Check back soon — tasks are added regularly</p>
+        </div>
+      ) : (
+        <>
+          <div className="grid gap-4">
+            {filtered.map((task) => {
+              const done = completedIds.has(task.id);
+              const isLoading = completing === task.id;
+              const displayReward = userReward(task.reward);
+              const completion = completions.find((c) => c.taskId === task.id);
+              return (
+                <div
+                  key={task.id}
+                  data-testid={`card-task-${task.id}`}
+                  className={cn(
+                    "border rounded-2xl p-5 transition-all",
+                    done
+                      ? "border-emerald-500/30 bg-emerald-500/5 opacity-80"
+                      : "border-white/10 bg-white/5 hover:border-white/20"
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-2 flex-wrap">
+                        <Badge className={cn("text-xs", task.type === "premium"
+                          ? "bg-amber-500/20 text-amber-300 border-amber-500/30"
+                          : "bg-blue-500/20 text-blue-300 border-blue-500/30"
+                        )}>
+                          {task.type === "premium" ? <><Star className="w-3 h-3 mr-1" />Premium</> : <><Zap className="w-3 h-3 mr-1" />Simple</>}
+                        </Badge>
+                        <Badge className="bg-white/10 text-white/60 border-white/10 text-xs">{task.platform}</Badge>
+                        {done && completion && (
+                          <Badge className={cn("text-xs border", {
+                            "bg-amber-500/20 text-amber-300 border-amber-500/30": completion.status === "pending",
+                            "bg-emerald-500/20 text-emerald-300 border-emerald-500/30": completion.status === "approved",
+                            "bg-red-500/20 text-red-300 border-red-500/30": completion.status === "rejected",
+                          })}>
+                            {completion.status === "pending" ? "⏳ Pending" : completion.status === "approved" ? "✅ Approved" : "❌ Rejected"}
+                            {completion.verifiedBy && ` • ${completion.verifiedBy}`}
+                          </Badge>
+                        )}
+                      </div>
+                      <h3 className="font-semibold text-white text-base mb-1">{task.title}</h3>
+                      <p className="text-sm text-white/50 line-clamp-2">{task.description}</p>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <div className="text-lg font-bold text-emerald-400">+{formatCurrency(displayReward)}</div>
+                      <div className="text-xs text-white/30 mt-0.5">per task</div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between mt-4 pt-4 border-t border-white/5">
+                    {done ? (
+                      <div className="flex items-center gap-2 text-emerald-400 text-sm font-medium">
+                        <CheckCircle className="w-4 h-4" />
+                        Completed
+                      </div>
+                    ) : (
+                      <Button
+                        size="sm"
+                        disabled={isLoading}
+                        data-testid={`button-complete-${task.id}`}
+                        onClick={() => handleComplete(task.id, task.url)}
+                        className="bg-emerald-500 hover:bg-emerald-400 text-white rounded-xl"
+                      >
+                        {isLoading ? (
+                          <><Loader2 className="w-4 h-4 animate-spin mr-1" />Completing...</>
+                        ) : (
+                          <><ExternalLink className="w-4 h-4 mr-1" />Complete Task</>
+                        )}
+                      </Button>
+                    )}
+                    <a
+                      href={task.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs text-white/30 hover:text-white/60 transition-colors flex items-center gap-1"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      Open link
+                    </a>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Load More */}
+          {hasMore && (
+            <div className="flex justify-center pt-2">
+              <Button
+                variant="outline"
+                onClick={loadMoreTasks}
+                disabled={loadingMore}
+                className="border-white/20 text-white/70 hover:text-white hover:bg-white/10"
+              >
+                {loadingMore ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                Load More Tasks
+              </Button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}

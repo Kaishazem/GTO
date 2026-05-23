@@ -1,0 +1,41 @@
+Fix these critical issues in the current implementation:
+
+=== ISSUE 1: Reconciliation Permission Error ===
+- Error: "Missing or insufficient permissions" when accessing Reconciliation tab
+- Fix: Update Firestore security rules to allow admin to read reconciliation data
+- Ensure admin can access: tasks, task_completions, withdrawals, platform_reports collections
+
+=== ISSUE 2: Wallet Page Visibility ===
+- Problem: Wallet page shows for admin users (should only show for regular users)
+- Fix: Add role-based routing - if user.role === 'admin', redirect to Admin Panel
+- Hide Wallet nav item for admin users
+
+=== ISSUE 3: Auto-Import Tasks from Platform ===
+- Implement automatic task fetching from offerwall platforms
+- Create backend function that:
+  a) Calls platform API to get available tasks
+  b) Categorizes them as "Simple" or "Premium" based on payout amount
+  c) Stores in Firestore `tasks` collection
+  d) Runs every 30 minutes automatically
+- Show import status in Admin Panel
+
+=== TESTING WORKFLOW (Manual Task) ===
+After fixes, test with manually added task:
+1. Admin adds task manually via "Add New Task" (price: 0.005 USDT)
+2. User sees task with calculated price (0.00325 USDT = 65%)
+3. User clicks "Complete Task" → Status: "Pending"
+4. System waits for platform postback (will come later when platform connected)
+5. Admin can see task in Reconciliation tab with status "Awaiting Platform Confirmation"
+6. When platform sends postback → Status changes to "Approved" or "Rejected"
+7. User requests withdrawal → Admin sees it in Withdrawals tab
+8. Admin approves/rejects withdrawal
+
+=== EXPECTED RESULTS ===
+After fixes:
+1. Admin can access Reconciliation tab without errors
+2. Admin cannot see Wallet page (redirects to Admin Panel)
+3. Regular users can see and use Wallet page normally
+4. Manually added tasks show correct pricing (65% for users)
+5. Reconciliation shows task status clearly (Pending/Approved/Rejected)
+
+Priority: Fix permission errors first, then test with manual task workflow.

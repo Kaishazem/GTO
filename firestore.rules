@@ -1,0 +1,79 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helper: check if the requesting user is an admin ──────────────────
+    function isAdmin() {
+      return request.auth != null &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin";
+    }
+
+    // ── Helper: check the user is authenticated ───────────────────────────
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // ── users/{userId} ────────────────────────────────────────────────────
+    // Users can read/write their own document; admins can read/write all.
+    match /users/{userId} {
+      allow read, write: if isSignedIn() && request.auth.uid == userId;
+      allow read, write: if isAdmin();
+    }
+
+    // ── tasks/{taskId} ────────────────────────────────────────────────────
+    // Public read (unauthenticated browsing); only admins may write.
+    match /tasks/{taskId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // ── taskCompletions/{completionId} ────────────────────────────────────
+    // Authenticated users can create completions for themselves.
+    // Users can read their own; admins can read/write all.
+    match /taskCompletions/{completionId} {
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read:   if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow update, delete: if isAdmin();
+    }
+
+    // ── payouts/{payoutId} ───────────────────────────────────────────────
+    // Users can create and read their own payout requests; admins manage all.
+    match /payouts/{payoutId} {
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read:   if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow update, delete: if isAdmin();
+    }
+
+    // ── stats/{statId} ────────────────────────────────────────────────────
+    // Authenticated users can read; only admins write.
+    match /stats/{statId} {
+      allow read:  if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // ── device_fingerprints/{fpId} ────────────────────────────────────────
+    // Written during registration (unauthenticated at that moment) and by admins.
+    // Only admins may read the full collection.
+    match /device_fingerprints/{fpId} {
+      allow create: if true;
+      allow read, update, delete: if isAdmin();
+    }
+
+    // ── banned_devices/{banId} ────────────────────────────────────────────
+    // Any authenticated user needs to read this to check their own ban status.
+    // Only admins may write.
+    match /banned_devices/{banId} {
+      allow read:  if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // ── settings/{docId} ─────────────────────────────────────────────────
+    // Authenticated users can read settings (needed for task/withdrawal config).
+    // Only admins may write.
+    match /settings/{docId} {
+      allow read:  if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+  }
+}

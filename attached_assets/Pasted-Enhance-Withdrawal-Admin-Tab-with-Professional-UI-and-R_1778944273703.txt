@@ -1,0 +1,83 @@
+Enhance Withdrawal Admin Tab with Professional UI and Reconciliation Integration:
+
+=== WITHDRAWAL TABLE DESIGN ===
+
+Create a clean, professional table in Admin Panel > Withdrawals tab with these columns:
+
+1. **User Info:**
+   - User Name (if available)
+   - Email (clickable to view profile)
+   - User ID (truncated)
+
+2. **Wallet Address:**
+   - Display wallet address (truncate to 20 chars with "..." in middle)
+   - Add [📋 Copy] button next to it
+   - On click: Copy full address to clipboard + show "Copied!" tooltip for 2 seconds
+
+3. **Net Payout Amount:**
+   - Calculate ONLY after reconciliation confirms tasks
+   - Formula: Net Payout = (Verified Tasks Total - 5% Fee - Gas Fee)
+   - Show in bold green: "$X.XXXX USDT"
+   - If reconciliation not complete: Show "Pending Verification" in amber
+
+4. **Breakdown Details:**
+   - Requested Amount: $X.XXXX
+   - Platform Fee (5%): -$X.XXXX
+   - Gas Fee: -$X.XXXX
+   - Net Payout: $X.XXXX (final)
+
+5. **Status & Date:**
+   - Status badge: Pending (amber) / Approved (green) / Rejected (red)
+   - Request Date & Time
+   - Last Updated timestamp
+
+6. **Action Buttons:**
+   - [Approve] button (green):
+     * Changes status to 'paid'
+     * Deducts Net Payout from user balance
+     * Records transaction in `admin_actions` collection
+     * Shows confirmation modal: "Confirm approval of $X.XXXX to [wallet]?"
+   
+   - [Reject] button (red):
+     * Opens modal with text area for rejection reason (optional)
+     * Changes status to 'rejected'
+     * Refunds full amount back to user balance
+     * Records reason in database
+
+=== RECONCILIATION INTEGRATION ===
+
+CRITICAL: Only show withdrawals where reconciliation is complete:
+- Check `reconciliation_status` field: Must be "Verified & Ready to Pay"
+- If status = "Pending" or "Flagged": Show warning badge ⚠️
+- Do NOT allow approval until reconciliation = 100% match
+
+=== SUMMARY CARDS ===
+
+Add 3 summary cards at top of Withdrawals tab:
+1. **Pending Count:** Number of withdrawals awaiting approval
+2. **Total Pending Amount:** Sum of all pending net payouts
+3. **Paid This Month:** Total amount paid out (with month selector)
+
+=== ADDITIONAL FEATURES ===
+
+1. **Filter & Search:**
+   - Filter by status (All / Pending / Approved / Rejected)
+   - Search by user email or wallet address
+   - Date range picker
+
+2. **Bulk Actions:**
+   - Checkbox to select multiple withdrawals
+   - [Bulk Approve] button (only for verified items)
+   - [Bulk Reject] button
+
+3. **Export:**
+   - [Export to CSV] button for current view
+   - Includes all columns + timestamps
+
+=== TESTING ===
+Test that:
+1. Copy button works on mobile and desktop
+2. Approve/Reject updates balance correctly
+3. Reconciliation check prevents approval of unverified withdrawals
+4. Summary cards show accurate totals
+5. Export CSV downloads properly formatted file
