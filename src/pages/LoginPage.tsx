@@ -1,10 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useAuth } from "@/contexts/AuthContext";
-import { auth } from "@/lib/firebase";
+import { auth, db } from "@/lib/firebase";
+import { doc, getDoc } from "firebase/firestore";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -29,6 +30,9 @@ export default function LoginPage() {
   const [resending, setResending] = useState(false);
   const [resendSent, setResendSent] = useState(false);
   const [securityError, setSecurityError] = useState("");
+  const [emailBanned, setEmailBanned] = useState(false);
+  const banCheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     const checkVerification = async () => {
       const user = auth.currentUser;
@@ -43,12 +47,37 @@ export default function LoginPage() {
     };
     checkVerification();
   }, []);
+
   const form = useForm<FormData>({
     resolver: zodResolver(schema),
     defaultValues: { email: "", password: "" },
   });
 
+  // Debounced email ban check: fires 600ms after the user stops typing
+  function handleEmailChange(value: string, fieldOnChange: (v: string) => void) {
+    fieldOnChange(value);
+    setEmailBanned(false);
+    if (banCheckTimerRef.current) clearTimeout(banCheckTimerRef.current);
+    const trimmed = value.trim().toLowerCase();
+    if (!trimmed || !trimmed.includes("@")) return;
+    banCheckTimerRef.current = setTimeout(async () => {
+      try {
+        const snap = await getDoc(doc(db, "banned_emails", trimmed));
+        if (snap.exists()) setEmailBanned(true);
+      } catch { /* non-blocking */ }
+    }, 600);
+  }
+
   async function onSubmit(data: FormData) {
+    // Hard-check ban immediately before submitting (in case debounce hasn't fired yet)
+    try {
+      const snap = await getDoc(doc(db, "banned_emails", data.email.trim().toLowerCase()));
+      if (snap.exists()) {
+        setEmailBanned(true);
+        return;
+      }
+    } catch { /* non-blocking */ }
+
     setLoading(true);
     setSecurityError("");
     setUnverifiedEmail("");
@@ -66,8 +95,6 @@ export default function LoginPage() {
         });
         return;
       }
-      // Redirect directly to the correct destination based on role —
-      // no intermediate stop at /dashboard that would cause a flicker for admins.
       setLocation(result.role === "admin" ? "/admin" : "/dashboard");
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Login failed";
@@ -77,7 +104,9 @@ export default function LoginPage() {
         msg.includes("datacenter") ||
         msg.includes("Bot") ||
         msg.includes("automated") ||
-        msg.includes("attempts")
+        msg.includes("attempts") ||
+        msg.includes("suspended") ||
+        msg.includes("banned")
       ) {
         setSecurityError(msg);
       } else {
@@ -122,8 +151,19 @@ export default function LoginPage() {
           <p className="text-emerald-300/70 mt-1">Complete tasks. Earn crypto.</p>
         </div>
 
+        {/* Banned email banner */}
+        {emailBanned && (
+          <div className="bg-red-500/15 border border-red-500/40 rounded-2xl p-4 flex gap-3">
+            <ShieldAlert className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-red-300 font-semibold text-sm">🚫 Access Denied</p>
+              <p className="text-red-400/80 text-xs mt-1">This email is permanently banned. Access denied.</p>
+            </div>
+          </div>
+        )}
+
         {/* Security error banner */}
-        {securityError && (
+        {securityError && !emailBanned && (
           <div className="bg-red-500/10 border border-red-500/30 rounded-2xl p-4 flex gap-3">
             <ShieldAlert className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
             <div>
@@ -188,7 +228,8 @@ export default function LoginPage() {
                         placeholder="you@example.com"
                         autoComplete="email"
                         data-testid="input-email"
-                        className="bg-white/10 border-white/20 text-white placeholder:text-white/40 focus:border-emerald-400"
+                        className={`bg-white/10 border-white/20 text-white placeholder:text-white/40 focus:border-emerald-400 ${emailBanned ? "border-red-500/60 focus:border-red-500" : ""}`}
+                        onChange={(e) => handleEmailChange(e.target.value, field.onChange)}
                       />
                     </FormControl>
                     <FormMessage />
@@ -229,12 +270,12 @@ export default function LoginPage() {
 
               <Button
                 type="submit"
-                disabled={loading}
+                disabled={loading || emailBanned}
                 data-testid="button-login"
-                className="w-full bg-emerald-500 hover:bg-emerald-400 text-white font-semibold py-3 rounded-xl transition-all"
+                className="w-full bg-emerald-500 hover:bg-emerald-400 text-white font-semibold py-3 rounded-xl transition-all disabled:opacity-50"
               >
                 {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <LogIn className="w-4 h-4 mr-2" />}
-                Sign In
+                {emailBanned ? "Access Denied" : "Sign In"}
               </Button>
             </form>
           </Form>

@@ -354,20 +354,39 @@ export default function AdminPage() {
   async function banUserDevice(userId: string, userName: string) {
     try {
       const userSnap = await getDoc(doc(db, "users", userId));
-      const fp = userSnap.data()?.deviceFingerprint as string | undefined;
+      const userData = userSnap.data();
+      const fp = userData?.deviceFingerprint as string | undefined;
+      const userEmail = userData?.email as string | undefined;
       if (!fp) {
         toast({ title: "Error", description: "No device fingerprint found for this user", variant: "destructive" });
         return;
       }
-      await addDoc(collection(db, "banned_devices"), {
-        fingerprint: fp,
-        reason: `Banned via admin panel — user: ${userName}`,
-        bannedAt: serverTimestamp(),
-        bannedBy: profile?.email || "admin",
-        userId,
-      });
+      await Promise.all([
+        // Ban the device fingerprint
+        addDoc(collection(db, "banned_devices"), {
+          fingerprint: fp,
+          reason: `Banned via admin panel — user: ${userName}`,
+          bannedAt: serverTimestamp(),
+          bannedBy: profile?.email || "admin",
+          userId,
+        }),
+        // Set isBanned on user doc (triggers real-time listener)
+        updateDoc(doc(db, "users", userId), {
+          isBanned: true,
+          bannedAt: serverTimestamp(),
+          bannedBy: profile?.email || "admin",
+        }),
+        // Add email to banned_emails collection
+        ...(userEmail ? [setDoc(doc(db, "banned_emails", userEmail.toLowerCase()), {
+          email: userEmail.toLowerCase(),
+          userId,
+          userName,
+          bannedAt: serverTimestamp(),
+          bannedBy: profile?.email || "admin",
+        })] : []),
+      ]);
       await fetchBannedDevices();
-      toast({ title: `✅ ${userName}'s device permanently banned` });
+      toast({ title: `✅ ${userName} permanently banned (device + account + email)` });
     } catch (e) {
       toast({ title: "Error", description: e instanceof Error ? e.message : "Failed", variant: "destructive" });
     }

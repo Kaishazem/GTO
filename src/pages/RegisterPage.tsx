@@ -4,6 +4,8 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useAuth } from "@/contexts/AuthContext";
+import { db } from "@/lib/firebase";
+import { doc, getDoc } from "firebase/firestore";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -33,7 +35,9 @@ export default function RegisterPage() {
   const [verifyEmail, setVerifyEmail] = useState("");
   const [securityError, setSecurityError] = useState("");
   const [honeypot, setHoneypot] = useState("");
+  const [emailBanned, setEmailBanned] = useState(false);
   const timingRef = useRef(createTimingChecker());
+  const banCheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     timingRef.current = createTimingChecker();
@@ -44,14 +48,37 @@ export default function RegisterPage() {
     defaultValues: { name: "", email: "", password: "", confirmPassword: "" },
   });
 
+  // Debounced email ban check
+  function handleEmailChange(value: string, fieldOnChange: (v: string) => void) {
+    fieldOnChange(value);
+    setEmailBanned(false);
+    if (banCheckTimerRef.current) clearTimeout(banCheckTimerRef.current);
+    const trimmed = value.trim().toLowerCase();
+    if (!trimmed || !trimmed.includes("@")) return;
+    banCheckTimerRef.current = setTimeout(async () => {
+      try {
+        const snap = await getDoc(doc(db, "banned_emails", trimmed));
+        if (snap.exists()) setEmailBanned(true);
+      } catch { /* non-blocking */ }
+    }, 600);
+  }
+
   async function onSubmit(data: FormData) {
     setLoading(true);
     setSecurityError("");
+    setEmailBanned(false);
     try {
+      // Check banned_emails before doing anything else
+      const emailSnap = await getDoc(doc(db, "banned_emails", data.email.trim().toLowerCase()));
+      if (emailSnap.exists()) {
+        setEmailBanned(true);
+        setSecurityError("This email address is not allowed to register.");
+        return;
+      }
+
       await register(data.email, data.password, data.name, honeypot, timingRef.current.check(3000));
       toast({ title: "✅ Check your email", description: "Verification link sent. Please verify to log in.", duration: 10000 });
       setVerifyEmail(data.email);
-      // auto-redirect after short delay
       setTimeout(() => setLocation("/login"), 3000);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Registration failed";
@@ -94,12 +121,14 @@ export default function RegisterPage() {
           <p className="text-emerald-300/70 mt-1">Complete tasks. Earn crypto.</p>
         </div>
 
-        {securityError && (
+        {(securityError || emailBanned) && (
           <div className="bg-red-500/10 border border-red-500/30 rounded-2xl p-4 flex gap-3">
             <ShieldAlert className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
             <div>
               <p className="text-red-300 font-medium text-sm">Registration Blocked</p>
-              <p className="text-red-400/80 text-xs mt-1">{securityError}</p>
+              <p className="text-red-400/80 text-xs mt-1">
+                {emailBanned ? "This email address is not allowed to register." : securityError}
+              </p>
             </div>
           </div>
         )}
@@ -129,9 +158,20 @@ export default function RegisterPage() {
                 <FormItem>
                   <FormLabel className="text-emerald-200">Email Address</FormLabel>
                   <FormControl>
-                    <Input {...field} type="email" placeholder="you@example.com" autoComplete="email" data-testid="input-email" className="bg-white/10 border-white/20 text-white placeholder:text-white/40 focus:border-emerald-400" />
+                    <Input
+                      {...field}
+                      type="email"
+                      placeholder="you@example.com"
+                      autoComplete="email"
+                      data-testid="input-email"
+                      className={`bg-white/10 border-white/20 text-white placeholder:text-white/40 focus:border-emerald-400 ${emailBanned ? "border-red-500/60" : ""}`}
+                      onChange={(e) => handleEmailChange(e.target.value, field.onChange)}
+                    />
                   </FormControl>
                   <FormMessage />
+                  {emailBanned && (
+                    <p className="text-xs text-red-400 mt-1">This email address is not allowed to register.</p>
+                  )}
                 </FormItem>
               )} />
 
@@ -161,8 +201,16 @@ export default function RegisterPage() {
                 </FormItem>
               )} />
 
-              <Button type="submit" disabled={loading} data-testid="button-register" className="w-full bg-emerald-500 hover:bg-emerald-400 text-white font-semibold py-3 rounded-xl transition-all mt-2">
-                {loading ? <span className="inline-flex items-center"><Loader2 className="w-4 h-4 animate-spin mr-2" />Running security checks...</span> : <span className="inline-flex items-center"><UserPlus className="w-4 h-4 mr-2" />Create Account</span>}
+              <Button
+                type="submit"
+                disabled={loading || emailBanned}
+                data-testid="button-register"
+                className="w-full bg-emerald-500 hover:bg-emerald-400 text-white font-semibold py-3 rounded-xl transition-all mt-2 disabled:opacity-50"
+              >
+                {loading
+                  ? <span className="inline-flex items-center"><Loader2 className="w-4 h-4 animate-spin mr-2" />Running security checks...</span>
+                  : <span className="inline-flex items-center"><UserPlus className="w-4 h-4 mr-2" />Create Account</span>
+                }
               </Button>
             </form>
           </Form>

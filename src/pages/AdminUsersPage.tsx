@@ -3,7 +3,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useLocation } from "wouter";
 import { db } from "@/lib/firebase";
 import {
-  collection, getDocs, doc, updateDoc, serverTimestamp, Timestamp,
+  collection, getDocs, doc, updateDoc, serverTimestamp, Timestamp, setDoc, deleteDoc,
 } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -109,17 +109,26 @@ export default function AdminUsersPage() {
   async function banAccount(user: AdminUser) {
     setBanningId(user.uid);
     try {
-      await updateDoc(doc(db, "users", user.uid), {
-        isBanned: true,
-        bannedAt: serverTimestamp(),
-        bannedBy: profile?.email || "admin",
-      });
+      await Promise.all([
+        updateDoc(doc(db, "users", user.uid), {
+          isBanned: true,
+          bannedAt: serverTimestamp(),
+          bannedBy: profile?.email || "admin",
+        }),
+        ...(user.email ? [setDoc(doc(db, "banned_emails", user.email.toLowerCase()), {
+          email: user.email.toLowerCase(),
+          userId: user.uid,
+          userName: user.name || user.email,
+          bannedAt: serverTimestamp(),
+          bannedBy: profile?.email || "admin",
+        })] : []),
+      ]);
       setUsers((prev) =>
         prev.map((u) => u.uid === user.uid ? { ...u, isBanned: true } : u)
       );
       toast({
         title: `🚫 ${user.name || user.email} banned`,
-        description: "Account blocked from logging in.",
+        description: "Account blocked from logging in and re-registering.",
       });
     } catch (err) {
       toast({ title: "Ban failed", description: String(err), variant: "destructive" });
@@ -131,11 +140,14 @@ export default function AdminUsersPage() {
   async function unbanAccount(user: AdminUser) {
     setBanningId(user.uid);
     try {
-      await updateDoc(doc(db, "users", user.uid), {
-        isBanned: false,
-        unbannedAt: serverTimestamp(),
-        unbannedBy: profile?.email || "admin",
-      });
+      await Promise.all([
+        updateDoc(doc(db, "users", user.uid), {
+          isBanned: false,
+          unbannedAt: serverTimestamp(),
+          unbannedBy: profile?.email || "admin",
+        }),
+        ...(user.email ? [deleteDoc(doc(db, "banned_emails", user.email.toLowerCase()))] : []),
+      ]);
       setUsers((prev) =>
         prev.map((u) => u.uid === user.uid ? { ...u, isBanned: false } : u)
       );

@@ -1,0 +1,29 @@
+I need you to fix two critical issues in my React + Firebase application:
+
+### 1. Fix Date Localization (English Only)
+In `src/pages/AdminPage.tsx` (around line 1220-1230), the "Paid This Month" date is displaying in Arabic (e.g., "مايو 26") because of `toLocaleString("default", ...)`.
+- **Fix:** Change `"default"` to `"en-US"` so it always displays in English (e.g., "May 26").
+- **Task:** Search the entire codebase for any other instances of `toLocaleString("default")`, `toLocaleDateString("default")`, or `toLocaleString()` without an explicit locale, and replace them with `"en-US"`.
+
+### 2. Implement Robust Real-Time Ban System
+Currently, banning a user doesn't kick them out immediately, and banned users can sometimes still log in.
+
+**A. Real-Time Listener in `AuthContext.tsx`:**
+- Inside the `onAuthStateChanged` listener (or a separate `useEffect`), add an `onSnapshot` listener to the current user's Firestore document (`users/{uid}`).
+- If `userData.isBanned === true`, immediately call `signOut(auth)` and set `deviceBanned` state to true.
+- Ensure this listener is cleaned up properly on unmount or user change.
+
+**B. Ban Check in Login/Register:**
+- In the `login()` function in `AuthContext.tsx`: Before allowing login, check the user's Firestore document. If `isBanned === true`, throw an error "This account has been suspended" and do not log them in.
+- In `AdminPage.tsx`: When the `banUserDevice` function is called, in addition to banning the device fingerprint, add the user's email to a new collection called `banned_emails` (Document ID = email lowercase).
+
+**C. Email Ban Check in `LoginPage.tsx`:**
+- Add logic to check if the email being typed exists in the `banned_emails` collection.
+- If the email is found in `banned_emails`:
+  - Show a red error banner: "🚫 This email is permanently banned. Access denied."
+  - Disable the "Sign In" button.
+
+**D. Email Ban Check in `RegisterPage.tsx`:**
+- Prevent registration if the email exists in `banned_emails`. Show an error "This email address is not allowed to register."
+
+Please implement these changes to ensure banned users are blocked immediately and cannot log in again.
