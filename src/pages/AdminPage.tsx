@@ -597,7 +597,6 @@ export default function AdminPage() {
       toast({ title: "✅ Settings saved" });
     } finally { setSavingSettings(false); }
   }
-    // دالة حفظ التحذير بشكل منفصل وسريع
   const handleSaveWarning = async () => {
     setSavingSettings(true);
     try {
@@ -1908,7 +1907,7 @@ export default function AdminPage() {
                   <option value="simple">Simple</option>
                   <option value="premium">Premium</option>
                 </select>
-                <Input type="number" step="0.00001" placeholder="Your price" value={newTask.reward} onChange={(e) => setNewTask({ ...newTask, reward: parseFloat(e.target.value) })} className="bg-white/10 border-white/20 text-white placeholder:text-white/30" />
+                <Input type="number" step="0.00001" inputMode="decimal" lang="en" placeholder="Reward (e.g. 0.005)" value={newTask.reward} onChange={(e) => setNewTask({ ...newTask, reward: parseFloat(e.target.value) })} className="bg-white/10 border-white/20 text-white placeholder:text-white/30" />
               </div>
               {newTask.reward > 0 && (
                 <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2 text-xs text-emerald-300">

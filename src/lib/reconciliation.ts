@@ -197,7 +197,7 @@ const unverified = approved.filter((c) => c.verifiedBy);
     completedAt: c.completedAt,
   }));
 
-  // دمج المهام غير الموثقة والمهام المعلقة معاً
+  // Combine unverified approved tasks and pending tasks together
 const combinedPending = [...unverified, ...pending];
 
 const pendingVerificationItems: PendingVerificationItem[] = combinedPending.map((c) => ({
