@@ -759,7 +759,7 @@ export default function AdminPage() {
       }
 
       if (totalImported > 0) await fetchTasks();
-      log.push(`Total: ${totalImported} new task(s) added at ${new Date().toLocaleTimeString()}`);
+      log.push(`Total: ${totalImported} new task(s) added at ${new Date().toLocaleTimeString("en-US")}`);
       setAutoImportLog(log);
       setLastAutoImport(new Date());
       setNextImportCountdown(30 * 60);
@@ -1172,7 +1172,7 @@ export default function AdminPage() {
                     <ChevronLeft className="w-3 h-3 text-white/60" />
                   </button>
                   <span className="text-xs text-white/50 w-14 text-center">
-                    {paidMonthDate.toLocaleString("default", { month: "short", year: "2-digit" })}
+                    {paidMonthDate.toLocaleString("en-US", { month: "short", year: "numeric" })}
                   </span>
                   <button onClick={() => setPaidMonthOffset((o) => Math.min(0, o + 1))}
                     disabled={paidMonthOffset === 0}
@@ -1210,7 +1210,7 @@ export default function AdminPage() {
                         <div className="flex items-center gap-4 text-xs text-white/60 flex-wrap">
                           <span>Withdrawal: <span className="text-amber-300 font-medium">${alert.withdrawalAmount.toFixed(2)} USDT</span></span>
                           <span>Flagged tasks: <span className="text-red-300 font-medium">{alert.flaggedTaskCount}</span></span>
-                          <span className="text-white/30">{alert.createdAt.toLocaleString()}</span>
+                          <span className="text-white/30">{alert.createdAt.toLocaleString("en-US")}</span>
                         </div>
                       </div>
                       <button onClick={() => dismissAlert(alert.id)}
@@ -1757,7 +1757,7 @@ export default function AdminPage() {
                             {item.rejectReason && (
                               <p className="text-xs text-red-400/70 mt-0.5">Reason: {item.rejectReason}</p>
                             )}
-                            <p className="text-xs text-white/25 mt-0.5">{item.completedAt.toLocaleDateString()}</p>
+                            <p className="text-xs text-white/25 mt-0.5">{item.completedAt.toLocaleDateString("en-US")}</p>
                           </div>
                           <span className="text-red-400 font-mono text-sm shrink-0">−{formatCurrency(item.reward)}</span>
                         </div>
@@ -1781,7 +1781,7 @@ export default function AdminPage() {
                           <div className="flex-1 min-w-0">
                             <p className="text-sm text-white font-medium truncate">{item.taskTitle}</p>
                             <p className="text-xs text-white/50">{item.userEmail}</p>
-                            <p className="text-xs text-white/25 mt-0.5">{item.completedAt.toLocaleDateString()}</p>
+                            <p className="text-xs text-white/25 mt-0.5">{item.completedAt.toLocaleDateString("en-US")}</p>
                           </div>
                           <span className="text-amber-300 font-mono text-sm shrink-0">{formatCurrency(item.reward)}</span>
                         </div>
@@ -2009,7 +2009,7 @@ export default function AdminPage() {
               </div>
               {lastAutoImport && (
                 <p className="text-xs text-white/30 mt-0.5">
-                  Last run: {lastAutoImport.toLocaleTimeString()} •
+                  Last run: {lastAutoImport.toLocaleTimeString("en-US")} •
                   Next run in: {Math.floor(nextImportCountdown / 60)}m {nextImportCountdown % 60}s
                 </p>
               )}
@@ -2158,7 +2158,7 @@ export default function AdminPage() {
                         <p className="text-xs text-white/50">User: <span className="font-mono">{event.userId}</span></p>
                         <p className="text-xs text-white/50">Task: <span className="font-mono">{event.taskId}</span></p>
                         {event.reason && <p className="text-xs text-red-400/70">Reason: {event.reason}</p>}
-                        <p className="text-xs text-white/30 mt-1">{new Date(event.receivedAt).toLocaleString()}</p>
+                        <p className="text-xs text-white/30 mt-1">{new Date(event.receivedAt).toLocaleString("en-US")}</p>
                       </div>
                       <div className="shrink-0 text-right">
                         <div className="text-lg font-bold text-emerald-400">{formatCurrency(event.amount)}</div>
