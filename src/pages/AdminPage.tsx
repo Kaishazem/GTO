@@ -382,13 +382,32 @@ export default function AdminPage() {
       return;
     }
     setBanningEmail(true);
+    const reason = banEmailReason.trim() || "Banned by admin";
     try {
+      // 1. Write to banned_emails collection (checked by Login/Register and AuthContext)
       await setDoc(doc(db, "banned_emails", email), {
         email,
-        reason: banEmailReason.trim() || "Banned by admin",
+        reason,
         bannedAt: serverTimestamp(),
         bannedBy: profile?.email || "admin",
       });
+
+      // 2. Also stamp isBanned + banReason on the user doc (GATE 1 — fastest check on session restore)
+      try {
+        const usersSnap = await getDocs(collection(db, "users"));
+        const matchingUser = usersSnap.docs.find(
+          (d) => (d.data().email as string)?.toLowerCase() === email
+        );
+        if (matchingUser) {
+          await updateDoc(doc(db, "users", matchingUser.id), {
+            isBanned: true,
+            banReason: reason,
+          });
+        }
+      } catch (userUpdateErr) {
+        console.warn("[Admin] Could not stamp user doc with isBanned:", userUpdateErr);
+      }
+
       await fetchBannedEmails();
       setBanEmailInput("");
       setBanEmailReason("");
@@ -402,6 +421,21 @@ export default function AdminPage() {
 
   async function unbanEmailAddress(email: string) {
     await deleteDoc(doc(db, "banned_emails", email));
+    // Also clear isBanned on the user doc so GATE 1 doesn't block them on session restore
+    try {
+      const usersSnap = await getDocs(collection(db, "users"));
+      const matchingUser = usersSnap.docs.find(
+        (d) => (d.data().email as string)?.toLowerCase() === email.toLowerCase()
+      );
+      if (matchingUser) {
+        await updateDoc(doc(db, "users", matchingUser.id), {
+          isBanned: false,
+          banReason: "",
+        });
+      }
+    } catch (err) {
+      console.warn("[Admin] Could not clear isBanned on user doc:", err);
+    }
     await fetchBannedEmails();
     toast({ title: `✅ ${email} unbanned` });
   }

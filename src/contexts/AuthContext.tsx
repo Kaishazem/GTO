@@ -54,6 +54,7 @@ interface AuthContextType {
   profile: UserProfile | null;
   loading: boolean;
   deviceBanned: boolean;
+  banReason: string;
   register: (email: string, password: string, name: string, honeypot: string, timingOk: boolean) => Promise<void>;
   login: (email: string, password: string) => Promise<{ unverified?: boolean; role?: "user" | "admin" }>;
   logout: () => Promise<void>;
@@ -114,6 +115,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [deviceBanned, setDeviceBanned] = useState(false);
+  const [banReason, setBanReason] = useState("");
 
   // ── Registration guard ────────────────────────────────────────────────────
   // Prevents onAuthStateChanged from auto-signing-out a newly created user
@@ -175,39 +177,42 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      setUser(firebaseUser);
-
       if (firebaseUser) {
-        // Fetch profile data
+        // Fetch profile data — but do NOT expose user to the app yet
         const profileData = await fetchProfile(firebaseUser.uid);
 
-        // ✅ FIX 1: Check Account Ban immediately on Load/Refresh
+        // ── GATE 1: isBanned field on user doc (fastest check — already fetched) ──
         if (profileData?.isBanned === true) {
-          console.log("[Auth] ❌ Account is BANNED. Signing out immediately.");
+          console.log("[Auth] ❌ Account is BANNED (isBanned). Signing out immediately.");
+          setBanReason((profileData.banReason as string) || "Your account has been permanently banned.");
           setDeviceBanned(true);
           await signOut(auth);
-          return;
+          return; // loading stays true until the null user event fires
         }
 
-        // ✅ FIX 1b: Check banned_emails collection for this user's email
+        // ── GATE 2: banned_emails Firestore check (hard gate, every session/tab) ──
         if (firebaseUser.email) {
           try {
             const emailBanSnap = await getDoc(doc(db, "banned_emails", firebaseUser.email.toLowerCase()));
             if (emailBanSnap.exists()) {
-              console.log("[Auth] ❌ Email is BANNED. Signing out immediately.");
+              const reason = (emailBanSnap.data()?.reason as string) || "Your email has been permanently banned.";
+              console.log("[Auth] ❌ Email is BANNED. Signing out immediately. Reason:", reason);
+              setBanReason(reason);
               setDeviceBanned(true);
               await signOut(auth);
-              return;
+              return; // loading stays true until the null user event fires
             }
           } catch (err) {
+            // Non-blocking — if Firestore is unreachable we fail open (better than locking out everyone)
             console.warn("[Auth] Email ban check failed (non-blocking):", err);
           }
         }
 
+        // ── ALL CHECKS PASSED — only now expose user to the app ──
+        setUser(firebaseUser);
         setLoading(false);
 
-        // ✅ FIX 2: Real-time Listener for Live Bans (isBanned field on user doc)
-        // Cancel previous listener if exists
+        // ── GATE 3: Real-time listener on user doc (catches live bans mid-session) ──
         if (window.userBanUnsubscribe) {
           window.userBanUnsubscribe();
         }
@@ -216,26 +221,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         window.userBanUnsubscribe = onSnapshot(userRef, (userDoc) => {
           if (userDoc.exists()) {
             const userData = userDoc.data();
-            // If admin sets isBanned: true, this triggers immediately
             if (userData?.isBanned === true) {
-              console.log("[Real-time Ban] 🚫 User just got banned! Signing out...");
+              console.log("[Real-time Ban] 🚫 User just got banned via user doc! Signing out...");
+              setBanReason((userData.banReason as string) || "Your account has been permanently banned.");
               setDeviceBanned(true);
               signOut(auth).catch(() => {});
             }
           }
         });
 
-        // ✅ FIX 3: Real-time Listener for Email Bans
+        // ── GATE 4: Real-time listener on banned_emails (catches live email bans mid-session) ──
         if (firebaseUser.email) {
           const emailBanRef = doc(db, "banned_emails", firebaseUser.email.toLowerCase());
           const emailBanUnsub = onSnapshot(emailBanRef, (snap) => {
             if (snap.exists()) {
+              const reason = (snap.data()?.reason as string) || "Your email has been permanently banned.";
               console.log("[Real-time Ban] 🚫 Email just got banned! Signing out...");
+              setBanReason(reason);
               setDeviceBanned(true);
               signOut(auth).catch(() => {});
             }
           });
-          // Chain cleanup with the existing user ban unsub
           const prevUnsub = window.userBanUnsubscribe;
           window.userBanUnsubscribe = () => { prevUnsub?.(); emailBanUnsub(); };
         }
@@ -410,6 +416,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const deviceBannedResult = await withTimeout(isDeviceBanned(fingerprint), 5000, false);
     if (deviceBannedResult) throw new Error("Fraud detected. This device is permanently banned.");
 
+    // ── Email ban pre-flight check (BEFORE signing in — catches bans on login attempts) ──
+    try {
+      const emailBanSnap = await getDoc(doc(db, "banned_emails", email.trim().toLowerCase()));
+      if (emailBanSnap.exists()) {
+        const reason = (emailBanSnap.data()?.reason as string) || "This account has been permanently banned.";
+        console.warn("[Login] Email is banned — blocking login. Reason:", reason);
+        setBanReason(reason);
+        setDeviceBanned(true);
+        throw new Error(reason);
+      }
+    } catch (err) {
+      if ((err as { code?: string })?.code === "permission-denied") {
+        // Firestore rules not yet deployed — fail open and rely on isBanned check below
+        console.warn("[Login] banned_emails permission-denied (rules not deployed). Falling back to isBanned check.");
+      } else {
+        // Re-throw: either our own ban error or an unexpected Firestore error
+        throw err;
+      }
+    }
+
     const cred = await signInWithEmailAndPassword(auth, email, password);
     if (!cred.user.emailVerified) {
       await signOut(auth);
@@ -417,14 +443,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return { unverified: true };
     }
 
-    // ── Account-level ban check (isBanned field on user doc) ──────────────
+    // ── Account-level ban check (isBanned field on user doc — fastest, most reliable) ──
     const userSnap = await getDoc(doc(db, "users", cred.user.uid));
     const userData = userSnap.data();
 
     if (userData?.isBanned === true) {
+      const reason = (userData.banReason as string) || "This account has been suspended for a policy violation.";
       await signOut(auth);
       console.warn("[Login] Account is banned — blocking login.");
-      throw new Error("This account has been suspended for a policy violation. Contact support if you believe this is an error.");
+      setBanReason(reason);
+      setDeviceBanned(true);
+      throw new Error(reason);
     }
 
     // ── Stored fingerprint ban check ──────────────────────────────────────
@@ -460,7 +489,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, profile, loading, deviceBanned, register, login, logout, refreshProfile, resendVerificationEmail }}>
+    <AuthContext.Provider value={{ user, profile, loading, deviceBanned, banReason, register, login, logout, refreshProfile, resendVerificationEmail }}>
       {children}
     </AuthContext.Provider>
   );

@@ -20,6 +20,7 @@ import { Loader2, ShieldX } from "lucide-react";
 const queryClient = new QueryClient();
 
 function BannedScreen() {
+  const { banReason } = useAuth();
   return (
     <div className="min-h-screen bg-slate-950 flex items-center justify-center p-6">
       <div className="max-w-sm w-full text-center space-y-5">
@@ -27,9 +28,9 @@ function BannedScreen() {
           <ShieldX className="w-10 h-10 text-red-400" />
         </div>
         <div>
-          <h1 className="text-2xl font-bold text-white">Device Banned</h1>
-          <p className="text-white/50 text-sm mt-3 leading-relaxed">
-            Fraud detected. This device has been permanently banned from Green Task Orbit due to a violation of our terms of service.
+          <h1 className="text-2xl font-bold text-white">Account Banned</h1>
+          <p className="text-white/70 text-sm mt-3 leading-relaxed font-medium">
+            {banReason || "This account has been permanently banned from Green Task Orbit due to a violation of our terms of service."}
           </p>
           <p className="text-white/30 text-xs mt-4">
             If you believe this is an error, contact support.
