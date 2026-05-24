@@ -17,10 +17,6 @@ import {
   getDoc,
   setDoc,
   serverTimestamp,
-  collection,
-  query,
-  where,
-  getDocs,
   onSnapshot,
 } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
@@ -29,7 +25,6 @@ import {
   detectHeadlessBrowser,
   detectIncognitoMode,
   persistFingerprintToIDB,
-  loadFingerprintFromIDB,
 } from "@/lib/fingerprint";
 import {
   detectHeadlessBrowser as detectHeadlessBot,
@@ -46,7 +41,6 @@ export interface UserProfile {
   registeredAt: Date;
   deviceFingerprint: string;
   trc20Address?: string;
-  allowDuplicateDevice?: boolean;
 }
 
 interface AuthContextType {
@@ -98,18 +92,6 @@ function withHardTimeout<T>(promise: Promise<T>, ms: number, label: string): Pro
   });
 }
 
-async function isDeviceBanned(fingerprint: string): Promise<boolean> {
-  if (!fingerprint) return false;
-  try {
-    const q = query(collection(db, "banned_devices"), where("fingerprint", "==", fingerprint));
-    const snap = await getDocs(q);
-    return !snap.empty;
-  } catch (err) {
-    console.warn("[isDeviceBanned] Check failed (non-blocking):", err);
-    return false;
-  }
-}
-
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -117,10 +99,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [deviceBanned, setDeviceBanned] = useState(false);
   const [banReason, setBanReason] = useState("");
 
-  // ── Registration guard ────────────────────────────────────────────────────
-  // Prevents onAuthStateChanged from auto-signing-out a newly created user
-  // before we finish writing their Firestore documents.
+  // Guard: prevents onAuthStateChanged from interfering during registration
   const isRegisteringRef = useRef(false);
+  // Guard: prevents ban checks from running during a deliberate sign-out
+  const isSigningOutRef = useRef(false);
 
   async function fetchProfile(uid: string): Promise<Record<string, unknown> | null> {
     const ref = doc(db, "users", uid);
@@ -137,7 +119,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       registeredAt: data.registeredAt?.toDate() || new Date(),
       deviceFingerprint: data.deviceFingerprint || "",
       trc20Address: data.trc20Address,
-      allowDuplicateDevice: data.allowDuplicateDevice === true,
     });
     return data;
   }
@@ -146,30 +127,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (user) await fetchProfile(user.uid);
   }
 
-    useEffect(() => {
-    // 1. Check device ban from IndexedDB on initial load
-    (async () => {
-      try {
-        const idbFp = await loadFingerprintFromIDB();
-        if (idbFp) {
-          const banned = await isDeviceBanned(idbFp);
-          if (banned) setDeviceBanned(true);
-        }
-      } catch { /* non-blocking */ }
-    })();
-
-    // 2. Auth State Listener
+  useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
       if (isRegisteringRef.current) {
-        console.log("[Auth] Registration in progress - skipping");
+        console.log("[Auth] Registration in progress — skipping auth state change");
+        return;
+      }
+
+      // ── Sign-out path: clear everything immediately, no ban checks ──────
+      if (isSigningOutRef.current || !firebaseUser) {
+        isSigningOutRef.current = false;
+        setUser(null);
+        setProfile(null);
+        setLoading(false);
+        if (window.userBanUnsubscribe) {
+          window.userBanUnsubscribe();
+          window.userBanUnsubscribe = undefined;
+        }
         return;
       }
 
       setLoading(true);
 
       // Handle unverified users
-      if (firebaseUser && !firebaseUser.emailVerified) {
-        console.log("[Auth] Unverified user - signing out");
+      if (!firebaseUser.emailVerified) {
+        console.log("[Auth] Unverified user — signing out");
         try { await signOut(auth); } catch {}
         setUser(null);
         setProfile(null);
@@ -177,86 +159,74 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      if (firebaseUser) {
-        // Fetch profile data — but do NOT expose user to the app yet
-        const profileData = await fetchProfile(firebaseUser.uid);
+      // Fetch profile data — do NOT expose user to the app yet
+      const profileData = await fetchProfile(firebaseUser.uid);
 
-        // ── GATE 1: isBanned field on user doc (fastest check — already fetched) ──
-        if (profileData?.isBanned === true) {
-          console.log("[Auth] ❌ Account is BANNED (isBanned). Signing out immediately.");
-          setBanReason((profileData.banReason as string) || "Your account has been permanently banned.");
-          setDeviceBanned(true);
-          await signOut(auth);
-          return; // loading stays true until the null user event fires
+      // ── GATE 1: isBanned on user doc (covers all ban types, fastest path) ──
+      if (profileData?.isBanned === true) {
+        console.log("[Auth] ❌ Account is BANNED (isBanned). Signing out immediately.");
+        setBanReason((profileData.banReason as string) || "Your account has been permanently banned.");
+        setDeviceBanned(true);
+        await signOut(auth);
+        return;
+      }
+
+      // ── GATE 2: banned_emails Firestore check (hard gate, every session/tab) ──
+      if (firebaseUser.email) {
+        try {
+          const emailBanSnap = await getDoc(doc(db, "banned_emails", firebaseUser.email.toLowerCase()));
+          if (emailBanSnap.exists()) {
+            const reason = (emailBanSnap.data()?.reason as string) || "Your email has been permanently banned.";
+            console.log("[Auth] ❌ Email is BANNED. Signing out immediately. Reason:", reason);
+            setBanReason(reason);
+            setDeviceBanned(true);
+            await signOut(auth);
+            return;
+          }
+        } catch (err) {
+          // Non-blocking — if rules not deployed yet, GATE 1 (isBanned) covers this
+          console.warn("[Auth] Email ban check failed (non-blocking):", err);
         }
+      }
 
-        // ── GATE 2: banned_emails Firestore check (hard gate, every session/tab) ──
-        if (firebaseUser.email) {
-          try {
-            const emailBanSnap = await getDoc(doc(db, "banned_emails", firebaseUser.email.toLowerCase()));
-            if (emailBanSnap.exists()) {
-              const reason = (emailBanSnap.data()?.reason as string) || "Your email has been permanently banned.";
-              console.log("[Auth] ❌ Email is BANNED. Signing out immediately. Reason:", reason);
-              setBanReason(reason);
-              setDeviceBanned(true);
-              await signOut(auth);
-              return; // loading stays true until the null user event fires
-            }
-          } catch (err) {
-            // Non-blocking — if Firestore is unreachable we fail open (better than locking out everyone)
-            console.warn("[Auth] Email ban check failed (non-blocking):", err);
+      // ── ALL CHECKS PASSED — expose user to the app ──────────────────────
+      setUser(firebaseUser);
+      setLoading(false);
+
+      // ── Real-time listener: user doc (catches live isBanned changes) ──────
+      if (window.userBanUnsubscribe) {
+        window.userBanUnsubscribe();
+      }
+      const userRef = doc(db, "users", firebaseUser.uid);
+      window.userBanUnsubscribe = onSnapshot(userRef, (userDoc) => {
+        if (userDoc.exists()) {
+          const userData = userDoc.data();
+          if (userData?.isBanned === true) {
+            console.log("[Real-time Ban] 🚫 User just got banned! Signing out...");
+            setBanReason((userData.banReason as string) || "Your account has been permanently banned.");
+            setDeviceBanned(true);
+            signOut(auth).catch(() => {});
           }
         }
+      });
 
-        // ── ALL CHECKS PASSED — only now expose user to the app ──
-        setUser(firebaseUser);
-        setLoading(false);
-
-        // ── GATE 3: Real-time listener on user doc (catches live bans mid-session) ──
-        if (window.userBanUnsubscribe) {
-          window.userBanUnsubscribe();
-        }
-
-        const userRef = doc(db, "users", firebaseUser.uid);
-        window.userBanUnsubscribe = onSnapshot(userRef, (userDoc) => {
-          if (userDoc.exists()) {
-            const userData = userDoc.data();
-            if (userData?.isBanned === true) {
-              console.log("[Real-time Ban] 🚫 User just got banned via user doc! Signing out...");
-              setBanReason((userData.banReason as string) || "Your account has been permanently banned.");
-              setDeviceBanned(true);
-              signOut(auth).catch(() => {});
-            }
+      // ── Real-time listener: banned_emails (catches live email bans mid-session) ──
+      if (firebaseUser.email) {
+        const emailBanRef = doc(db, "banned_emails", firebaseUser.email.toLowerCase());
+        const emailBanUnsub = onSnapshot(emailBanRef, (snap) => {
+          if (snap.exists()) {
+            const reason = (snap.data()?.reason as string) || "Your email has been permanently banned.";
+            console.log("[Real-time Ban] 🚫 Email just got banned! Signing out...");
+            setBanReason(reason);
+            setDeviceBanned(true);
+            signOut(auth).catch(() => {});
           }
         });
-
-        // ── GATE 4: Real-time listener on banned_emails (catches live email bans mid-session) ──
-        if (firebaseUser.email) {
-          const emailBanRef = doc(db, "banned_emails", firebaseUser.email.toLowerCase());
-          const emailBanUnsub = onSnapshot(emailBanRef, (snap) => {
-            if (snap.exists()) {
-              const reason = (snap.data()?.reason as string) || "Your email has been permanently banned.";
-              console.log("[Real-time Ban] 🚫 Email just got banned! Signing out...");
-              setBanReason(reason);
-              setDeviceBanned(true);
-              signOut(auth).catch(() => {});
-            }
-          });
-          const prevUnsub = window.userBanUnsubscribe;
-          window.userBanUnsubscribe = () => { prevUnsub?.(); emailBanUnsub(); };
-        }
-
-      } else {
-        // User logged out
-        setProfile(null);
-        setLoading(false);
-        if (window.userBanUnsubscribe) {
-          window.userBanUnsubscribe();
-        }
+        const prevUnsub = window.userBanUnsubscribe;
+        window.userBanUnsubscribe = () => { prevUnsub?.(); emailBanUnsub(); };
       }
     });
 
-    // Cleanup function
     return () => {
       unsub();
       if (window.userBanUnsubscribe) {
@@ -293,61 +263,44 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (isHeadless) throw new Error("Automated browser detected. Registration blocked.");
     console.log("[Register] Step 3: PASSED ✓");
 
-    // ── Device fingerprint (5-second max) ────────────────────────────────
-    console.log("[Register] Step 4: Generating device fingerprint (5s max)...");
+    // ── Device fingerprint (monitoring only — not used for blocking) ───────
+    console.log("[Register] Step 4: Generating device fingerprint...");
     const fingerprint = await withTimeout(getDeviceFingerprint(), 5000, "fingerprint-timeout");
     console.log("[Register] Step 4: Fingerprint =", fingerprint.slice(0, 16) + "...");
-    try { localStorage.setItem("gto_device_fp", fingerprint); } catch { /* ignore */ }
 
-    // ── Ban / duplicate checks ────────────────────────────────────────────
-    console.log("[Register] Step 5: Checking device ban list (Firestore)...");
+    // ── Email ban check before creating account ───────────────────────────
+    console.log("[Register] Step 5: Checking email ban list...");
     try {
-      const banned = await withTimeout(isDeviceBanned(fingerprint), 5000, false);
-      console.log("[Register] Step 5: banned =", banned);
-      if (banned) throw new Error("Fraud detected. This device is permanently banned.");
-    } catch (e) {
-      if (e instanceof Error && e.message.includes("permanently banned")) throw e;
-      console.warn("[Register] Step 5: Ban check failed (non-blocking):", e);
-    }
-
-    console.log("[Register] Step 6: Checking duplicate device fingerprint (Firestore)...");
-    try {
-      const fpRef = doc(db, "device_fingerprints", fingerprint);
-      console.log("[Register] Step 6: Reading device_fingerprints/" + fingerprint.slice(0, 8) + "...");
-      const fpDoc = await withTimeout(getDoc(fpRef), 5000, null);
-      console.log("[Register] Step 6: fpDoc exists =", fpDoc?.exists?.() ?? "timeout/null");
-      if (fpDoc?.exists()) {
-        const override = fpDoc.data()?.allowDuplicateDevice === true;
-        if (!override) throw new Error("This device is already registered. Please login to your existing account.");
-        console.warn("[Register] Step 6: Duplicate device allowed by admin override.");
+      const emailBanSnap = await getDoc(doc(db, "banned_emails", email.trim().toLowerCase()));
+      if (emailBanSnap.exists()) {
+        const reason = (emailBanSnap.data()?.reason as string) || "This email address is not allowed to register.";
+        throw new Error(reason);
       }
     } catch (e) {
-      if (e instanceof Error && e.message.includes("already registered")) throw e;
-      const idbFp = await loadFingerprintFromIDB();
-      const lsFp = (() => { try { return localStorage.getItem("gto_device_fp"); } catch { return null; } })();
-      if ((idbFp && idbFp === fingerprint) || (lsFp && lsFp === fingerprint)) {
-        console.warn("[Register] Step 6: Could not verify server-side uniqueness, IDB match found.");
-      } else {
-        console.warn("[Register] Step 6: Duplicate check error (non-blocking):", e);
+      if ((e as { code?: string })?.code === "permission-denied") {
+        console.warn("[Register] Step 5: Email ban check permission-denied (non-blocking)");
+      } else if (e instanceof Error) {
+        throw e;
       }
     }
+    console.log("[Register] Step 5: PASSED ✓");
 
     // ── Create Firebase Auth account ──────────────────────────────────────
-    console.log("[Register] Step 7: Creating Firebase Auth account...");
-    isRegisteringRef.current = true; // 🔒 Block onAuthStateChanged auto-signout
+    console.log("[Register] Step 6: Creating Firebase Auth account...");
+    isRegisteringRef.current = true;
     let cred;
     try {
       cred = await createUserWithEmailAndPassword(auth, email, password);
-      console.log("[Register] Step 7: Auth account created, UID =", cred.user.uid);
+      console.log("[Register] Step 6: Auth account created, UID =", cred.user.uid);
     } catch (authErr) {
       isRegisteringRef.current = false;
-      console.error("[Register] Step 7: FAILED to create auth account:", authErr);
+      console.error("[Register] Step 6: FAILED to create auth account:", authErr);
       throw authErr;
     }
 
     try {
       // ── Write main user profile ─────────────────────────────────────────
-      console.log("[Register] Step 8: Writing users/" + cred.user.uid + " to Firestore...");
+      console.log("[Register] Step 7: Writing users/" + cred.user.uid + " to Firestore...");
       await withHardTimeout(
         setDoc(doc(db, "users", cred.user.uid), {
           email,
@@ -357,51 +310,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           pendingBalance: 0,
           registeredAt: serverTimestamp(),
           deviceFingerprint: fingerprint,
-          allowDuplicateDevice: false,
         }),
         8000,
         "setDoc users"
       );
-      console.log("[Register] Step 8: users doc written ✓");
+      console.log("[Register] Step 7: users doc written ✓");
 
-      // ── Write device fingerprint record ─────────────────────────────────
-      console.log("[Register] Step 9: Writing device_fingerprints/" + fingerprint.slice(0, 8) + "...");
+      // ── Write device fingerprint record (monitoring only) ────────────────
+      console.log("[Register] Step 8: Writing device_fingerprints record...");
       try {
         await withHardTimeout(
           setDoc(doc(db, "device_fingerprints", fingerprint), {
             userId: cred.user.uid,
+            userEmail: email,
             registeredAt: serverTimestamp(),
-            allowDuplicateDevice: false,
           }),
           8000,
           "setDoc device_fingerprints"
         );
-        console.log("[Register] Step 9: device_fingerprints doc written ✓");
+        console.log("[Register] Step 8: device_fingerprints doc written ✓");
       } catch (fpErr) {
-        console.error("[Register] Step 9: device_fingerprints write FAILED (non-blocking):", fpErr);
-        // non-blocking — don't abort registration for this
+        console.error("[Register] Step 8: device_fingerprints write FAILED (non-blocking):", fpErr);
       }
 
       // ── Persist fingerprint locally ─────────────────────────────────────
-      console.log("[Register] Step 10: Persisting fingerprint to IndexedDB...");
       await persistFingerprintToIDB(fingerprint);
-      try { localStorage.setItem("gto_device_fp", fingerprint); } catch { /* ignore */ }
-      console.log("[Register] Step 10: Fingerprint persisted ✓");
 
       // ── Send verification email ─────────────────────────────────────────
-      console.log("[Register] Step 11: Sending verification email...");
+      console.log("[Register] Step 9: Sending verification email...");
       try {
         await withHardTimeout(sendEmailVerification(cred.user), 10000, "sendEmailVerification");
-        await new Promise(res => setTimeout(res, 500));
-        console.log("[Register] Step 11: Verification email sent ✓");
+        console.log("[Register] Step 9: Verification email sent ✓");
       } catch (mailErr) {
-        console.error("[Register] Step 11: Failed to send verification email:", mailErr);
-        // Non-blocking — user was created and Firestore written; email can be resent
+        console.error("[Register] Step 9: Failed to send verification email:", mailErr);
       }
 
       console.log("[Register] ── Registration complete ✓ ──────────────────");
     } finally {
-      // ── Always release the guard and sign out ───────────────────────────
       isRegisteringRef.current = false;
       console.log("[Register] Releasing registration guard, signing out...");
       try { await signOut(auth); } catch { /* ignore */ }
@@ -411,12 +356,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   async function login(email: string, password: string): Promise<{ unverified?: boolean; role?: "user" | "admin" }> {
     console.log("[Login] Starting login for:", email);
 
-    // ── Device-level ban check ────────────────────────────────────────────
-    const fingerprint = await withTimeout(getDeviceFingerprint(), 5000, "fingerprint-timeout");
-    const deviceBannedResult = await withTimeout(isDeviceBanned(fingerprint), 5000, false);
-    if (deviceBannedResult) throw new Error("Fraud detected. This device is permanently banned.");
-
-    // ── Email ban pre-flight check (BEFORE signing in — catches bans on login attempts) ──
+    // ── Email ban pre-flight (BEFORE signing in — no Firebase session created) ──
     try {
       const emailBanSnap = await getDoc(doc(db, "banned_emails", email.trim().toLowerCase()));
       if (emailBanSnap.exists()) {
@@ -428,10 +368,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     } catch (err) {
       if ((err as { code?: string })?.code === "permission-denied") {
-        // Firestore rules not yet deployed — fail open and rely on isBanned check below
         console.warn("[Login] banned_emails permission-denied (rules not deployed). Falling back to isBanned check.");
       } else {
-        // Re-throw: either our own ban error or an unexpected Firestore error
         throw err;
       }
     }
@@ -443,7 +381,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return { unverified: true };
     }
 
-    // ── Account-level ban check (isBanned field on user doc — fastest, most reliable) ──
+    // ── Account-level ban check (isBanned field on user doc) ──────────────
     const userSnap = await getDoc(doc(db, "users", cred.user.uid));
     const userData = userSnap.data();
 
@@ -456,17 +394,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error(reason);
     }
 
-    // ── Stored fingerprint ban check ──────────────────────────────────────
-    const storedFp = userData?.deviceFingerprint as string | undefined;
-    if (storedFp) {
-      const storedBanned = await withTimeout(isDeviceBanned(storedFp), 5000, false);
-      if (storedBanned) {
-        await signOut(auth);
-        throw new Error("This account has been suspended. Contact support.");
-      }
-    }
-
+    // ── Save fingerprint for monitoring (not for banning) ─────────────────
+    const fingerprint = await withTimeout(getDeviceFingerprint(), 5000, "fingerprint-timeout");
     await persistFingerprintToIDB(fingerprint);
+
     await fetchProfile(cred.user.uid);
     const role = (userData?.role as "user" | "admin") || "user";
     console.log("[Login] Login successful ✓ role:", role);
@@ -484,8 +415,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function logout() {
-    await signOut(auth);
+    // Set the sign-out flag BEFORE calling signOut so onAuthStateChanged
+    // skips all ban checks and immediately clears state → instant redirect to /login
+    isSigningOutRef.current = true;
+    setUser(null);
     setProfile(null);
+    setDeviceBanned(false);
+    setBanReason("");
+    if (window.userBanUnsubscribe) {
+      window.userBanUnsubscribe();
+      window.userBanUnsubscribe = undefined;
+    }
+    try { await signOut(auth); } catch { /* ignore */ }
   }
 
   return (

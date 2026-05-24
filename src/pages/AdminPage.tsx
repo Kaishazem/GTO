@@ -37,7 +37,7 @@ type TabType = "withdrawals" | "tasks" | "import" | "postbacks" | "settings" | "
 
 type AdminUser = {
   uid: string; email: string; name: string; role: string;
-  balance: number; deviceFingerprint: string; allowDuplicateDevice: boolean;
+  balance: number; deviceFingerprint: string;
   registeredAt: Date;
 };
 
@@ -110,11 +110,6 @@ export default function AdminPage() {
   const [loadingPostbacks, setLoadingPostbacks] = useState(false);
   const [processingPostback, setProcessingPostback] = useState<string | null>(null);
 
-  const [bannedDevices, setBannedDevices] = useState<{ id: string; fingerprint: string; reason: string; bannedAt: Date }[]>([]);
-  const [banInput, setBanInput] = useState("");
-  const [banReason, setBanReason] = useState("");
-  const [banning, setBanning] = useState(false);
-
   // Email Ban System
   const [bannedEmails, setBannedEmails] = useState<{ email: string; reason: string; bannedAt: Date; bannedBy: string }[]>([]);
   const [banEmailInput, setBanEmailInput] = useState("");
@@ -126,7 +121,6 @@ export default function AdminPage() {
   const [allUsers, setAllUsers] = useState<AdminUser[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [userSearch, setUserSearch] = useState("");
-  const [togglingUser, setTogglingUser] = useState<string | null>(null);
 
   // Withdrawal settings
   const [usdtEnabled, setUsdtEnabled] = useState(true);
@@ -194,7 +188,6 @@ export default function AdminPage() {
     if (profile.role !== "admin") { setLocation("/dashboard"); return; }
     fetchAllWithdrawals();
     fetchTasks();
-    fetchBannedDevices();
     fetchAdminAlerts();
     getSettings().then((s) => {
       setWithdrawalInstructionText(s.withdrawalInstructionText || "");
@@ -280,7 +273,6 @@ export default function AdminPage() {
           role: data.role as string || "user",
           balance: (data.balance as number) || 0,
           deviceFingerprint: (data.deviceFingerprint as string) || "",
-          allowDuplicateDevice: data.allowDuplicateDevice === true,
           registeredAt: (data.registeredAt as Timestamp)?.toDate() || new Date(),
         };
       });
@@ -289,73 +281,6 @@ export default function AdminPage() {
     } finally {
       setLoadingUsers(false);
     }
-  }
-
-  async function toggleDuplicateDevice(user: AdminUser) {
-    setTogglingUser(user.uid);
-    try {
-      const newVal = !user.allowDuplicateDevice;
-      await updateDoc(doc(db, "users", user.uid), { allowDuplicateDevice: newVal });
-      // Also update device_fingerprints doc if it exists
-      if (user.deviceFingerprint) {
-        try {
-          await updateDoc(doc(db, "device_fingerprints", user.deviceFingerprint), {
-            allowDuplicateDevice: newVal,
-          });
-        } catch { /* doc may not exist yet — non-blocking */ }
-      }
-      setAllUsers((prev) =>
-        prev.map((u) => u.uid === user.uid ? { ...u, allowDuplicateDevice: newVal } : u)
-      );
-      toast({
-        title: newVal ? "Override enabled" : "Override disabled",
-        description: newVal
-          ? `${user.email} can now register on another device`
-          : `${user.email} is restricted to their original device`,
-      });
-    } finally {
-      setTogglingUser(null);
-    }
-  }
-
-  async function fetchBannedDevices() {
-    const snap = await getDocs(collection(db, "banned_devices"));
-    const list = snap.docs.map((d) => ({
-      id: d.id,
-      fingerprint: d.data().fingerprint as string,
-      reason: d.data().reason as string || "",
-      bannedAt: (d.data().bannedAt as Timestamp)?.toDate() || new Date(),
-    }));
-    list.sort((a, b) => b.bannedAt.getTime() - a.bannedAt.getTime());
-    setBannedDevices(list);
-  }
-
-  async function banDevice() {
-    if (!banInput.trim()) {
-      toast({ title: "Error", description: "Enter a device fingerprint to ban", variant: "destructive" });
-      return;
-    }
-    setBanning(true);
-    try {
-      await addDoc(collection(db, "banned_devices"), {
-        fingerprint: banInput.trim(),
-        reason: banReason.trim() || "Banned by admin",
-        bannedAt: serverTimestamp(),
-        bannedBy: profile?.email || "admin",
-      });
-      await fetchBannedDevices();
-      setBanInput("");
-      setBanReason("");
-      toast({ title: "✅ Device banned permanently" });
-    } finally {
-      setBanning(false);
-    }
-  }
-
-  async function unbanDevice(id: string) {
-    await deleteDoc(doc(db, "banned_devices", id));
-    await fetchBannedDevices();
-    toast({ title: "Device unbanned" });
   }
 
   async function fetchBannedEmails() {
@@ -438,47 +363,6 @@ export default function AdminPage() {
     }
     await fetchBannedEmails();
     toast({ title: `✅ ${email} unbanned` });
-  }
-
-  async function banUserDevice(userId: string, userName: string) {
-    try {
-      const userSnap = await getDoc(doc(db, "users", userId));
-      const userData = userSnap.data();
-      const fp = userData?.deviceFingerprint as string | undefined;
-      const userEmail = userData?.email as string | undefined;
-      if (!fp) {
-        toast({ title: "Error", description: "No device fingerprint found for this user", variant: "destructive" });
-        return;
-      }
-      await Promise.all([
-        // Ban the device fingerprint
-        addDoc(collection(db, "banned_devices"), {
-          fingerprint: fp,
-          reason: `Banned via admin panel — user: ${userName}`,
-          bannedAt: serverTimestamp(),
-          bannedBy: profile?.email || "admin",
-          userId,
-        }),
-        // Set isBanned on user doc (triggers real-time listener)
-        updateDoc(doc(db, "users", userId), {
-          isBanned: true,
-          bannedAt: serverTimestamp(),
-          bannedBy: profile?.email || "admin",
-        }),
-        // Add email to banned_emails collection
-        ...(userEmail ? [setDoc(doc(db, "banned_emails", userEmail.toLowerCase()), {
-          email: userEmail.toLowerCase(),
-          userId,
-          userName,
-          bannedAt: serverTimestamp(),
-          bannedBy: profile?.email || "admin",
-        })] : []),
-      ]);
-      await fetchBannedDevices();
-      toast({ title: `✅ ${userName} permanently banned (device + account + email)` });
-    } catch (e) {
-      toast({ title: "Error", description: e instanceof Error ? e.message : "Failed", variant: "destructive" });
-    }
   }
 
   async function fetchTasks() {
@@ -1660,12 +1544,6 @@ export default function AdminPage() {
                         className="flex-1 border-red-500/30 text-red-400 hover:bg-red-500/10 rounded-xl">
                         <XCircle className="w-4 h-4 mr-1.5" />Reject
                       </Button>
-                      <Button size="sm" variant="outline"
-                        onClick={() => banUserDevice(w.userId, w.userName)}
-                        className="border-red-900/40 text-red-500/60 hover:text-red-400 hover:bg-red-500/10 rounded-xl px-3"
-                        title="Permanently ban this user's device">
-                        <ShieldX className="w-4 h-4" />
-                      </Button>
                     </div>
                   )}
                 </div>
@@ -2502,12 +2380,7 @@ export default function AdminPage() {
                     u.name.toLowerCase().includes(userSearch.toLowerCase())
                   )
                   .map((u) => (
-                    <div key={u.uid} className={cn(
-                      "flex items-center justify-between gap-3 rounded-xl px-4 py-3 border",
-                      u.allowDuplicateDevice
-                        ? "bg-amber-500/5 border-amber-500/15"
-                        : "bg-white/3 border-white/8"
-                    )}>
+                    <div key={u.uid} className="flex items-center justify-between gap-3 rounded-xl px-4 py-3 border bg-white/3 border-white/8">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           <p className="text-sm font-medium text-white truncate">{u.name}</p>
@@ -2516,41 +2389,15 @@ export default function AdminPage() {
                               ? "bg-purple-500/20 text-purple-300"
                               : "bg-white/10 text-white/40"
                           )}>{u.role}</span>
-                          {u.allowDuplicateDevice && (
-                            <span className="text-xs bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 rounded">
-                              Device Override ON
-                            </span>
-                          )}
                         </div>
                         <p className="text-xs text-white/40 mt-0.5">{u.email}</p>
                         <div className="flex items-center gap-3 mt-0.5">
                           <p className="text-xs text-emerald-400">${u.balance.toFixed(4)}</p>
-                          <p className="text-xs text-white/25 font-mono truncate max-w-[140px]">
-                            fp: {u.deviceFingerprint.slice(0, 12) || "—"}
+                          <p className="text-xs text-white/25 font-mono truncate max-w-[160px]" title={u.deviceFingerprint}>
+                            fp: {u.deviceFingerprint.slice(0, 16) || "—"}
                           </p>
                           <p className="text-xs text-white/25">{formatDate(u.registeredAt)}</p>
                         </div>
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <button
-                          onClick={() => toggleDuplicateDevice(u)}
-                          disabled={togglingUser === u.uid}
-                          title={u.allowDuplicateDevice ? "Disable device override" : "Allow duplicate device"}
-                          className={cn(
-                            "relative inline-flex h-5 w-9 items-center rounded-full border transition-colors disabled:opacity-50",
-                            u.allowDuplicateDevice
-                              ? "bg-amber-500 border-amber-400"
-                              : "bg-white/10 border-white/20"
-                          )}
-                        >
-                          {togglingUser === u.uid
-                            ? <Loader2 className="w-3 h-3 animate-spin absolute left-1/2 -translate-x-1/2 text-white" />
-                            : <span className={cn(
-                                "inline-block h-3 w-3 rounded-full bg-white shadow transition-transform",
-                                u.allowDuplicateDevice ? "translate-x-5" : "translate-x-1"
-                              )} />
-                          }
-                        </button>
                       </div>
                     </div>
                   ))}
@@ -2812,46 +2659,6 @@ export default function AdminPage() {
             )}
           </div>
 
-          {/* Hard Ban System */}
-          <div className="bg-red-500/5 border border-red-500/20 rounded-2xl p-6 space-y-5">
-            <h2 className="font-semibold text-red-400 flex items-center gap-2"><ShieldX className="w-4 h-4" />Hard Ban System (Device Fingerprint)</h2>
-            <p className="text-xs text-white/40">Banned devices are permanently blocked from accessing Green Task Orbit. Bans survive cache clears and VPN changes because they target device fingerprints stored in Firestore.</p>
-
-            <div className="space-y-3">
-              <Input value={banInput} onChange={(e) => setBanInput(e.target.value)}
-                placeholder="Device fingerprint (e.g. 3h9k2j_ab12cd34)"
-                className="bg-white/10 border-red-500/30 text-white placeholder:text-white/30 font-mono text-sm" />
-              <Input value={banReason} onChange={(e) => setBanReason(e.target.value)}
-                placeholder="Reason (optional)"
-                className="bg-white/10 border-red-500/30 text-white placeholder:text-white/30" />
-              <Button onClick={banDevice} disabled={banning}
-                className="bg-red-500 hover:bg-red-400 text-white rounded-xl">
-                {banning ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <ShieldX className="w-4 h-4 mr-2" />}
-                Ban Device
-              </Button>
-            </div>
-
-            {bannedDevices.length > 0 && (
-              <div>
-                <h3 className="text-sm font-medium text-white/70 mb-3">Banned Devices ({bannedDevices.length})</h3>
-                <div className="space-y-2 max-h-64 overflow-y-auto">
-                  {bannedDevices.map((b) => (
-                    <div key={b.id} className="flex items-center justify-between gap-3 bg-red-500/5 border border-red-500/10 rounded-xl p-3">
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-mono text-red-300 truncate">{b.fingerprint}</p>
-                        {b.reason && <p className="text-xs text-white/40 mt-0.5">{b.reason}</p>}
-                        <p className="text-xs text-white/25 mt-0.5">{formatDate(b.bannedAt)}</p>
-                      </div>
-                      <button onClick={() => unbanDevice(b.id)}
-                        className="shrink-0 flex items-center gap-1 text-xs text-red-400/60 hover:text-red-300 transition-colors px-2 py-1 rounded-lg hover:bg-red-500/10">
-                        <ShieldOff className="w-3 h-3" />Unban
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
         </div>
       )}
     </div>
