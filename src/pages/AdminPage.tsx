@@ -98,7 +98,7 @@ export default function AdminPage() {
   const [dashboardWarningEnabled, setDashboardWarningEnabled] = useState(false);
   const [dashboardWarningMessage, setDashboardWarningMessage] = useState("");
 
-  const [newTask, setNewTask] = useState({ title: "", description: "", type: "simple" as "simple" | "premium", reward: 0.005, url: "", platform: "" });
+  const [newTask, setNewTask] = useState({ title: "", description: "", type: "simple" as "simple" | "premium", reward: "0.005", url: "", platform: "" });
   const [addingTask, setAddingTask] = useState(false);
 
   const [fetchingNetwork, setFetchingNetwork] = useState<string | null>(null);
@@ -124,12 +124,12 @@ export default function AdminPage() {
   // Withdrawal settings
   const [usdtEnabled, setUsdtEnabled] = useState(true);
   const [usdcEnabled, setUsdcEnabled] = useState(true);
-  const [usdtMin, setUsdtMin] = useState(10);
-  const [usdcMin, setUsdcMin] = useState(10);
-  const [usdtGas, setUsdtGas] = useState(1.0);
-  const [usdcTrc20Gas, setUsdcTrc20Gas] = useState(1.0);
-  const [usdcErc20Gas, setUsdcErc20Gas] = useState(5.0);
-  const [withdrawalFeePercent, setWithdrawalFeePercent] = useState(5);
+  const [usdtMin, setUsdtMin] = useState("10");
+  const [usdcMin, setUsdcMin] = useState("10");
+  const [usdtGas, setUsdtGas] = useState("1.0");
+  const [usdcTrc20Gas, setUsdcTrc20Gas] = useState("1.0");
+  const [usdcErc20Gas, setUsdcErc20Gas] = useState("5.0");
+  const [withdrawalFeePercent, setWithdrawalFeePercent] = useState("5");
   const [withdrawalSchedule, setWithdrawalSchedule] = useState<"instant" | "daily" | "weekly">("instant");
   const [allowDuplicateWallets, setAllowDuplicateWallets] = useState(false);
 
@@ -195,12 +195,12 @@ export default function AdminPage() {
       setPostbackSecret(s.networkKeys?.postbackSecret || "");
       setUsdtEnabled(s.usdtEnabled !== false);
       setUsdcEnabled(s.usdcEnabled !== false);
-      setUsdtMin(s.usdtMin ?? 10);
-      setUsdcMin(s.usdcMin ?? 10);
-      setUsdtGas(s.usdtGas ?? 1.0);
-      setUsdcTrc20Gas(s.usdcTrc20Gas ?? 1.0);
-      setUsdcErc20Gas(s.usdcErc20Gas ?? 5.0);
-      setWithdrawalFeePercent(s.withdrawalFeePercent ?? 5);
+      setUsdtMin(String(s.usdtMin ?? 10));
+      setUsdcMin(String(s.usdcMin ?? 10));
+      setUsdtGas(String(s.usdtGas ?? 1.0));
+      setUsdcTrc20Gas(String(s.usdcTrc20Gas ?? 1.0));
+      setUsdcErc20Gas(String(s.usdcErc20Gas ?? 5.0));
+      setWithdrawalFeePercent(String(s.withdrawalFeePercent ?? 5));
       setWithdrawalSchedule(s.withdrawalSchedule ?? "instant");
       setAllowDuplicateWallets(s.allowDuplicateWallets ?? false);
     });
@@ -570,8 +570,8 @@ export default function AdminPage() {
     }
     setAddingTask(true);
     try {
-      await addDoc(collection(db, "tasks"), { ...newTask, active: true, networkStatus: "pending", createdAt: serverTimestamp() });
-      setNewTask({ title: "", description: "", type: "simple", reward: 0.005, url: "", platform: "" });
+      await addDoc(collection(db, "tasks"), { ...newTask, reward: parseFloat(newTask.reward) || 0, active: true, networkStatus: "pending", createdAt: serverTimestamp() });
+      setNewTask({ title: "", description: "", type: "simple", reward: "0.005", url: "", platform: "" });
       await fetchTasks();
       toast({ title: "✅ Task added" });
     } finally { setAddingTask(false); }
@@ -602,12 +602,12 @@ export default function AdminPage() {
         networkKeys: { ...networkKeys, postbackSecret },
         usdtEnabled,
         usdcEnabled,
-        usdtMin,
-        usdcMin,
-        usdtGas,
-        usdcTrc20Gas,
-        usdcErc20Gas,
-        withdrawalFeePercent,
+        usdtMin: parseFloat(usdtMin) || 0,
+        usdcMin: parseFloat(usdcMin) || 0,
+        usdtGas: parseFloat(usdtGas) || 0,
+        usdcTrc20Gas: parseFloat(usdcTrc20Gas) || 0,
+        usdcErc20Gas: parseFloat(usdcErc20Gas) || 0,
+        withdrawalFeePercent: parseFloat(withdrawalFeePercent) || 0,
         withdrawalSchedule,
         allowDuplicateWallets,
         dashboardWarningEnabled,
@@ -1922,15 +1922,15 @@ export default function AdminPage() {
               <Input placeholder="Task URL *" value={newTask.url} onChange={(e) => setNewTask({ ...newTask, url: e.target.value })} className="bg-white/10 border-white/20 text-white placeholder:text-white/30" />
               <div className="grid grid-cols-3 gap-3">
                 <Input placeholder="Platform *" value={newTask.platform} onChange={(e) => setNewTask({ ...newTask, platform: e.target.value })} className="bg-white/10 border-white/20 text-white placeholder:text-white/30" />
-                <select value={newTask.type} onChange={(e) => setNewTask({ ...newTask, type: e.target.value as "simple" | "premium", reward: e.target.value === "premium" ? 0.05 : 0.005 })} className="bg-slate-800 border border-white/20 text-white rounded-md px-3 text-sm">
+                <select value={newTask.type} onChange={(e) => setNewTask({ ...newTask, type: e.target.value as "simple" | "premium", reward: e.target.value === "premium" ? "0.05" : "0.005" })} className="bg-slate-800 border border-white/20 text-white rounded-md px-3 text-sm">
                   <option value="simple">Simple</option>
                   <option value="premium">Premium</option>
                 </select>
-                <Input type="number" step="0.00001" inputMode="decimal" lang="en" placeholder="Reward (e.g. 0.005)" value={newTask.reward} onChange={(e) => setNewTask({ ...newTask, reward: parseFloat(e.target.value) })} className="bg-white/10 border-white/20 text-white placeholder:text-white/30" />
+                <Input type="text" inputMode="decimal" step="any" lang="en" placeholder="Reward (e.g. 0.005)" value={newTask.reward} onChange={(e) => setNewTask({ ...newTask, reward: e.target.value })} className="bg-white/10 border-white/20 text-white placeholder:text-white/30" />
               </div>
-              {newTask.reward > 0 && (
+              {parseFloat(newTask.reward) > 0 && (
                 <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2 text-xs text-emerald-300">
-                  Users earn: <span className="font-bold">{formatCurrency(userReward(newTask.reward))}</span><span className="text-white/40 ml-1">(65% of {formatCurrency(newTask.reward)})</span>
+                  Users earn: <span className="font-bold">{formatCurrency(userReward(parseFloat(newTask.reward) || 0))}</span><span className="text-white/40 ml-1">(65% of {formatCurrency(parseFloat(newTask.reward) || 0)})</span>
                 </div>
               )}
               <Button onClick={handleAddTask} disabled={addingTask} className="bg-emerald-500 hover:bg-emerald-400 text-white rounded-xl">
@@ -2537,13 +2537,13 @@ export default function AdminPage() {
                   <div>
                     <label className="text-xs text-white/50 block mb-1">USDT Minimum</label>
                     <Input type="text" inputMode="decimal" pattern="[0-9.]*" lang="en" value={usdtMin}
-                      onChange={(e) => setUsdtMin(parseFloat(e.target.value.replace(/[^0-9.]/g, "")) || 0)}
+                      onChange={(e) => setUsdtMin(e.target.value)}
                       className="bg-white/10 border-white/20 text-white" />
                   </div>
                   <div>
                     <label className="text-xs text-white/50 block mb-1">USDC Minimum</label>
                     <Input type="text" inputMode="decimal" pattern="[0-9.]*" lang="en" value={usdcMin}
-                      onChange={(e) => setUsdcMin(parseFloat(e.target.value.replace(/[^0-9.]/g, "")) || 0)}
+                      onChange={(e) => setUsdcMin(e.target.value)}
                       className="bg-white/10 border-white/20 text-white" />
                   </div>
                 </div>
@@ -2556,19 +2556,19 @@ export default function AdminPage() {
                   <div>
                     <label className="text-xs text-white/50 block mb-1">USDT Gas</label>
                     <Input type="text" inputMode="decimal" pattern="[0-9.]*" lang="en" value={usdtGas}
-                      onChange={(e) => setUsdtGas(parseFloat(e.target.value.replace(/[^0-9.]/g, "")) || 0)}
+                      onChange={(e) => setUsdtGas(e.target.value)}
                       className="bg-white/10 border-white/20 text-white" />
                   </div>
                   <div>
                     <label className="text-xs text-white/50 block mb-1">USDC TRC20 Gas</label>
                     <Input type="text" inputMode="decimal" pattern="[0-9.]*" lang="en" value={usdcTrc20Gas}
-                      onChange={(e) => setUsdcTrc20Gas(parseFloat(e.target.value.replace(/[^0-9.]/g, "")) || 0)}
+                      onChange={(e) => setUsdcTrc20Gas(e.target.value)}
                       className="bg-white/10 border-white/20 text-white" />
                   </div>
                   <div>
                     <label className="text-xs text-white/50 block mb-1">USDC ERC20 Gas</label>
                     <Input type="text" inputMode="decimal" pattern="[0-9.]*" lang="en" value={usdcErc20Gas}
-                      onChange={(e) => setUsdcErc20Gas(parseFloat(e.target.value.replace(/[^0-9.]/g, "")) || 0)}
+                      onChange={(e) => setUsdcErc20Gas(e.target.value)}
                       className="bg-white/10 border-white/20 text-white" />
                   </div>
                 </div>
@@ -2579,7 +2579,7 @@ export default function AdminPage() {
                 <div>
                   <label className="text-xs text-white/50 block mb-1">Withdrawal Fee / Commission (%)</label>
                   <Input type="text" inputMode="decimal" pattern="[0-9.]*" lang="en" value={withdrawalFeePercent}
-                    onChange={(e) => setWithdrawalFeePercent(parseFloat(e.target.value.replace(/[^0-9.]/g, "")) || 0)}
+                    onChange={(e) => setWithdrawalFeePercent(e.target.value)}
                     className="bg-white/10 border-white/20 text-white" />
                   <p className="text-xs text-white/30 mt-1">Platform takes this % from each withdrawal</p>
                 </div>
