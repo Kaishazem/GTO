@@ -115,6 +115,13 @@ export default function AdminPage() {
   const [banReason, setBanReason] = useState("");
   const [banning, setBanning] = useState(false);
 
+  // Email Ban System
+  const [bannedEmails, setBannedEmails] = useState<{ email: string; reason: string; bannedAt: Date; bannedBy: string }[]>([]);
+  const [banEmailInput, setBanEmailInput] = useState("");
+  const [banEmailReason, setBanEmailReason] = useState("");
+  const [banningEmail, setBanningEmail] = useState(false);
+  const [loadingBannedEmails, setLoadingBannedEmails] = useState(false);
+
   // Users management
   const [allUsers, setAllUsers] = useState<AdminUser[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
@@ -349,6 +356,54 @@ export default function AdminPage() {
     await deleteDoc(doc(db, "banned_devices", id));
     await fetchBannedDevices();
     toast({ title: "Device unbanned" });
+  }
+
+  async function fetchBannedEmails() {
+    setLoadingBannedEmails(true);
+    try {
+      const snap = await getDocs(collection(db, "banned_emails"));
+      const list = snap.docs.map((d) => ({
+        email: d.id,
+        reason: d.data().reason || "",
+        bannedAt: (d.data().bannedAt as Timestamp)?.toDate() || new Date(),
+        bannedBy: d.data().bannedBy || "",
+      }));
+      list.sort((a, b) => b.bannedAt.getTime() - a.bannedAt.getTime());
+      setBannedEmails(list);
+    } finally {
+      setLoadingBannedEmails(false);
+    }
+  }
+
+  async function banEmailAddress() {
+    const email = banEmailInput.trim().toLowerCase();
+    if (!email || !email.includes("@")) {
+      toast({ title: "Error", description: "Enter a valid email address", variant: "destructive" });
+      return;
+    }
+    setBanningEmail(true);
+    try {
+      await setDoc(doc(db, "banned_emails", email), {
+        email,
+        reason: banEmailReason.trim() || "Banned by admin",
+        bannedAt: serverTimestamp(),
+        bannedBy: profile?.email || "admin",
+      });
+      await fetchBannedEmails();
+      setBanEmailInput("");
+      setBanEmailReason("");
+      toast({ title: `✅ ${email} permanently banned` });
+    } catch (e) {
+      toast({ title: "Error", description: e instanceof Error ? e.message : "Failed", variant: "destructive" });
+    } finally {
+      setBanningEmail(false);
+    }
+  }
+
+  async function unbanEmailAddress(email: string) {
+    await deleteDoc(doc(db, "banned_emails", email));
+    await fetchBannedEmails();
+    toast({ title: `✅ ${email} unbanned` });
   }
 
   async function banUserDevice(userId: string, userName: string) {
@@ -2659,9 +2714,73 @@ export default function AdminPage() {
 
 
 
+          {/* Email Ban System */}
+          <div className="bg-orange-500/5 border border-orange-500/20 rounded-2xl p-6 space-y-5">
+            <div className="flex items-center justify-between">
+              <h2 className="font-semibold text-orange-400 flex items-center gap-2"><ShieldX className="w-4 h-4" />Email Ban System</h2>
+              <button onClick={fetchBannedEmails} disabled={loadingBannedEmails} className="text-xs text-white/40 hover:text-white/70 transition-colors">
+                {loadingBannedEmails ? "Loading..." : `Refresh (${bannedEmails.length})`}
+              </button>
+            </div>
+            <p className="text-xs text-white/40">Banned emails are blocked from logging in and registering. The check runs in real-time — a logged-in user is kicked out immediately when their email is banned.</p>
+
+            <div className="space-y-3">
+              <Input
+                value={banEmailInput}
+                onChange={(e) => setBanEmailInput(e.target.value)}
+                type="email"
+                placeholder="Email address to ban (e.g. badactor@gmail.com)"
+                className="bg-white/10 border-orange-500/30 text-white placeholder:text-white/30"
+              />
+              <Input
+                value={banEmailReason}
+                onChange={(e) => setBanEmailReason(e.target.value)}
+                placeholder="Reason (shown to user in the error banner)"
+                className="bg-white/10 border-orange-500/30 text-white placeholder:text-white/30"
+              />
+              <Button
+                onClick={banEmailAddress}
+                disabled={banningEmail}
+                className="bg-orange-500 hover:bg-orange-400 text-white rounded-xl"
+              >
+                {banningEmail ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <ShieldX className="w-4 h-4 mr-2" />}
+                Ban Email Address
+              </Button>
+            </div>
+
+            {bannedEmails.length > 0 && (
+              <div>
+                <h3 className="text-sm font-medium text-white/70 mb-3">Banned Emails ({bannedEmails.length})</h3>
+                <div className="space-y-2 max-h-64 overflow-y-auto">
+                  {bannedEmails.map((b) => (
+                    <div key={b.email} className="flex items-center justify-between gap-3 bg-orange-500/5 border border-orange-500/10 rounded-xl p-3">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs text-orange-300 truncate font-medium">{b.email}</p>
+                        {b.reason && <p className="text-xs text-white/40 mt-0.5">{b.reason}</p>}
+                        <p className="text-xs text-white/25 mt-0.5">{formatDate(b.bannedAt)} · by {b.bannedBy}</p>
+                      </div>
+                      <button
+                        onClick={() => unbanEmailAddress(b.email)}
+                        className="shrink-0 flex items-center gap-1 text-xs text-orange-400/60 hover:text-orange-300 transition-colors px-2 py-1 rounded-lg hover:bg-orange-500/10"
+                      >
+                        <ShieldOff className="w-3 h-3" />Unban
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {bannedEmails.length === 0 && (
+              <button onClick={fetchBannedEmails} disabled={loadingBannedEmails} className="w-full text-xs text-white/30 hover:text-white/50 py-2 transition-colors">
+                {loadingBannedEmails ? "Loading..." : "Click to load banned emails"}
+              </button>
+            )}
+          </div>
+
           {/* Hard Ban System */}
           <div className="bg-red-500/5 border border-red-500/20 rounded-2xl p-6 space-y-5">
-            <h2 className="font-semibold text-red-400 flex items-center gap-2"><ShieldX className="w-4 h-4" />Hard Ban System</h2>
+            <h2 className="font-semibold text-red-400 flex items-center gap-2"><ShieldX className="w-4 h-4" />Hard Ban System (Device Fingerprint)</h2>
             <p className="text-xs text-white/40">Banned devices are permanently blocked from accessing Green Task Orbit. Bans survive cache clears and VPN changes because they target device fingerprints stored in Firestore.</p>
 
             <div className="space-y-3">

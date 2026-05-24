@@ -31,6 +31,7 @@ export default function LoginPage() {
   const [resendSent, setResendSent] = useState(false);
   const [securityError, setSecurityError] = useState("");
   const [emailBanned, setEmailBanned] = useState(false);
+  const [banReason, setBanReason] = useState("");
   const banCheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -57,13 +58,17 @@ export default function LoginPage() {
   function handleEmailChange(value: string, fieldOnChange: (v: string) => void) {
     fieldOnChange(value);
     setEmailBanned(false);
+    setBanReason("");
     if (banCheckTimerRef.current) clearTimeout(banCheckTimerRef.current);
     const trimmed = value.trim().toLowerCase();
     if (!trimmed || !trimmed.includes("@")) return;
     banCheckTimerRef.current = setTimeout(async () => {
       try {
         const snap = await getDoc(doc(db, "banned_emails", trimmed));
-        if (snap.exists()) setEmailBanned(true);
+        if (snap.exists()) {
+          setEmailBanned(true);
+          setBanReason(snap.data()?.reason || "Permanently banned by admin");
+        }
       } catch { /* non-blocking */ }
     }, 600);
   }
@@ -74,6 +79,7 @@ export default function LoginPage() {
       const snap = await getDoc(doc(db, "banned_emails", data.email.trim().toLowerCase()));
       if (snap.exists()) {
         setEmailBanned(true);
+        setBanReason(snap.data()?.reason || "Permanently banned by admin");
         return;
       }
     } catch { /* non-blocking */ }
@@ -156,8 +162,9 @@ export default function LoginPage() {
           <div className="bg-red-500/15 border border-red-500/40 rounded-2xl p-4 flex gap-3">
             <ShieldAlert className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
             <div>
-              <p className="text-red-300 font-semibold text-sm">🚫 Access Denied</p>
-              <p className="text-red-400/80 text-xs mt-1">This email is permanently banned. Access denied.</p>
+              <p className="text-red-300 font-semibold text-sm">🚫 Account Banned</p>
+              <p className="text-red-400/80 text-xs mt-1 font-medium">{banReason || "This email is permanently banned. Access denied."}</p>
+              <p className="text-red-400/50 text-xs mt-1">Contact support if you believe this is an error.</p>
             </div>
           </div>
         )}

@@ -67,6 +67,15 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // ── banned_emails/{email} ─────────────────────────────────────────────
+    // ANYONE (including unauthenticated) may read — required so Login and
+    // Register pages can check before the user is signed in.
+    // Only admins may write / delete.
+    match /banned_emails/{email} {
+      allow read:  if true;
+      allow write: if isAdmin();
+    }
+
     // ── settings/{docId} ─────────────────────────────────────────────────
     // Authenticated users can read settings (needed for task/withdrawal config).
     // Only admins may write.

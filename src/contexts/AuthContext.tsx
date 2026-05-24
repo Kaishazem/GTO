@@ -189,9 +189,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           return;
         }
 
+        // ✅ FIX 1b: Check banned_emails collection for this user's email
+        if (firebaseUser.email) {
+          try {
+            const emailBanSnap = await getDoc(doc(db, "banned_emails", firebaseUser.email.toLowerCase()));
+            if (emailBanSnap.exists()) {
+              console.log("[Auth] ❌ Email is BANNED. Signing out immediately.");
+              setDeviceBanned(true);
+              await signOut(auth);
+              return;
+            }
+          } catch (err) {
+            console.warn("[Auth] Email ban check failed (non-blocking):", err);
+          }
+        }
+
         setLoading(false);
 
-        // ✅ FIX 2: Real-time Listener for Live Bans
+        // ✅ FIX 2: Real-time Listener for Live Bans (isBanned field on user doc)
         // Cancel previous listener if exists
         if (window.userBanUnsubscribe) {
           window.userBanUnsubscribe();
@@ -209,6 +224,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             }
           }
         });
+
+        // ✅ FIX 3: Real-time Listener for Email Bans
+        if (firebaseUser.email) {
+          const emailBanRef = doc(db, "banned_emails", firebaseUser.email.toLowerCase());
+          const emailBanUnsub = onSnapshot(emailBanRef, (snap) => {
+            if (snap.exists()) {
+              console.log("[Real-time Ban] 🚫 Email just got banned! Signing out...");
+              setDeviceBanned(true);
+              signOut(auth).catch(() => {});
+            }
+          });
+          // Chain cleanup with the existing user ban unsub
+          const prevUnsub = window.userBanUnsubscribe;
+          window.userBanUnsubscribe = () => { prevUnsub?.(); emailBanUnsub(); };
+        }
 
       } else {
         // User logged out

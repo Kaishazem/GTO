@@ -36,6 +36,7 @@ export default function RegisterPage() {
   const [securityError, setSecurityError] = useState("");
   const [honeypot, setHoneypot] = useState("");
   const [emailBanned, setEmailBanned] = useState(false);
+  const [banReason, setBanReason] = useState("");
   const timingRef = useRef(createTimingChecker());
   const banCheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -52,13 +53,17 @@ export default function RegisterPage() {
   function handleEmailChange(value: string, fieldOnChange: (v: string) => void) {
     fieldOnChange(value);
     setEmailBanned(false);
+    setBanReason("");
     if (banCheckTimerRef.current) clearTimeout(banCheckTimerRef.current);
     const trimmed = value.trim().toLowerCase();
     if (!trimmed || !trimmed.includes("@")) return;
     banCheckTimerRef.current = setTimeout(async () => {
       try {
         const snap = await getDoc(doc(db, "banned_emails", trimmed));
-        if (snap.exists()) setEmailBanned(true);
+        if (snap.exists()) {
+          setEmailBanned(true);
+          setBanReason(snap.data()?.reason || "Permanently banned by admin");
+        }
       } catch { /* non-blocking */ }
     }, 600);
   }
@@ -67,12 +72,15 @@ export default function RegisterPage() {
     setLoading(true);
     setSecurityError("");
     setEmailBanned(false);
+    setBanReason("");
     try {
       // Check banned_emails before doing anything else
       const emailSnap = await getDoc(doc(db, "banned_emails", data.email.trim().toLowerCase()));
       if (emailSnap.exists()) {
+        const reason = emailSnap.data()?.reason || "Permanently banned by admin";
         setEmailBanned(true);
-        setSecurityError("This email address is not allowed to register.");
+        setBanReason(reason);
+        setSecurityError(reason);
         return;
       }
 
