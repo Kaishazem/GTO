@@ -43,7 +43,7 @@ export default function WalletPage() {
   const [currency, setCurrency] = useState<Currency>("USDT");
   const [network, setNetwork] = useState<Network>("TRC20");
   const [walletAddress, setWalletAddress] = useState(profile?.trc20Address || "");
-  const [amount, setAmount] = useState<number>(10);
+  const [amount, setAmount] = useState<string>("10");
   const [addrError, setAddrError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [savingAddress, setSavingAddress] = useState(false);
@@ -53,7 +53,7 @@ export default function WalletPage() {
   setLoadingSettings(true);
   getSettings().then((s) => {
     setSettings(s);
-    setAmount(s.usdtMin);
+    setAmount(String(s.usdtMin));
     setLoadingSettings(false);
   });
 }, []);
@@ -68,9 +68,10 @@ export default function WalletPage() {
     ? (settings?.usdcTrc20Gas ?? 1)
     : (settings?.usdcErc20Gas ?? 5);
 
+  const amountNum = parseFloat(amount) || 0;
   const feePercent = settings?.withdrawalFeePercent ?? 5;
-  const commission = amount * (feePercent / 100);
-  const netAmount = Math.max(0, amount - commission - gasFee);
+  const commission = amountNum * (feePercent / 100);
+  const netAmount = Math.max(0, amountNum - commission - gasFee);
   const balance = profile?.balance || 0;
   const canWithdraw = balance >= minAmount;
   const needMore = Math.max(0, minAmount - balance);
@@ -149,7 +150,7 @@ export default function WalletPage() {
     e.preventDefault();
     const addrErr = validateAddress(walletAddress, currency, network);
     if (addrErr) { toast({ title: "Invalid address", description: addrErr, variant: "destructive" }); return; }
-    if (amount < minAmount) {
+    if (amountNum < minAmount) {
       toast({ title: "Below minimum", description: `Minimum withdrawal is $${minAmount}`, variant: "destructive" });
       return;
     }
@@ -159,9 +160,9 @@ export default function WalletPage() {
     }
     setSubmitting(true);
     try {
-      await requestWithdrawal(amount, walletAddress, currency, network, gasFee, netAmount, feePercent);
+      await requestWithdrawal(amountNum, walletAddress, currency, network, gasFee, netAmount, feePercent);
       toast({ title: "✅ Submitted", description: "Your withdrawal request is under review" });
-      setAmount(minAmount);
+      setAmount(String(minAmount));
     } catch (e: unknown) {
       toast({ title: "Error", description: e instanceof Error ? e.message : "Something went wrong", variant: "destructive" });
     } finally { setSubmitting(false); }
@@ -331,19 +332,19 @@ export default function WalletPage() {
               inputMode="decimal"
               lang="en"
               value={amount}
-              onChange={(e) => setAmount(parseFloat(e.target.value) || 0)}
+              onChange={(e) => setAmount(e.target.value)}
               className="bg-white/10 border-white/20 text-white focus:border-emerald-400"
             />
             <p className="text-xs text-white/40 mt-1">Min: ${minAmount.toLocaleString("en-US", { minimumFractionDigits: 2 })} • Available: ${balance.toLocaleString("en-US", { minimumFractionDigits: 5, maximumFractionDigits: 5 })}</p>
           </div>
 
           {/* Fee breakdown */}
-          {amount > 0 && (
+          {amountNum > 0 && (
             <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-2">
               <p className="text-xs font-medium text-white/60 mb-3">Fee Breakdown</p>
               <div className="flex justify-between text-sm">
                 <span className="text-white/60">Withdrawal amount</span>
-                <span className="text-white">${amount.toFixed(5)}</span>
+                <span className="text-white">${amountNum.toFixed(5)}</span>
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-white/60">Commission ({feePercent}%)</span>
