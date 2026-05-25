@@ -74,14 +74,22 @@ export default function RegisterPage() {
     setEmailBanned(false);
     setBanReason("");
     try {
-      // Check banned_emails before doing anything else
-      const emailSnap = await getDoc(doc(db, "banned_emails", data.email.trim().toLowerCase()));
-      if (emailSnap.exists()) {
-        const reason = emailSnap.data()?.reason || "Permanently banned by admin";
-        setEmailBanned(true);
-        setBanReason(reason);
-        setSecurityError(reason);
-        return;
+      // Check banned_emails before doing anything else (non-blocking if rules not deployed)
+      try {
+        const emailSnap = await getDoc(doc(db, "banned_emails", data.email.trim().toLowerCase()));
+        if (emailSnap.exists()) {
+          const reason = emailSnap.data()?.reason || "Permanently banned by admin";
+          setEmailBanned(true);
+          setBanReason(reason);
+          setSecurityError(reason);
+          return;
+        }
+      } catch (banCheckErr) {
+        if ((banCheckErr as { code?: string })?.code !== "permission-denied") {
+          throw banCheckErr;
+        }
+        // permission-denied means rules not deployed yet — skip silently,
+        // register() does its own guarded check as well
       }
 
       await register(data.email, data.password, data.name, honeypot, timingRef.current.check(3000));
