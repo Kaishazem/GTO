@@ -327,12 +327,14 @@ export default function WalletPage() {
           <div>
             <label className="text-sm font-medium text-white/80 block mb-1.5">Amount (USD)</label>
             <Input
-              type="number"
-              step="0.000001" 
+              type="text"
               inputMode="decimal"
               lang="en"
               value={amount}
-              onChange={(e) => setAmount(e.target.value)}
+              onChange={(e) => {
+                const v = e.target.value.replace(/[^0-9.]/g, "");
+                setAmount(v);
+              }}
               className="bg-white/10 border-white/20 text-white focus:border-emerald-400"
             />
             <p className="text-xs text-white/40 mt-1">Min: ${minAmount.toLocaleString("en-US", { minimumFractionDigits: 2 })} • Available: ${balance.toLocaleString("en-US", { minimumFractionDigits: 5, maximumFractionDigits: 5 })}</p>
