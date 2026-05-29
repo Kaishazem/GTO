@@ -236,14 +236,16 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     const wRef = doc(db, "withdrawals", id);
     const wSnap = await getDoc(wRef);
     const wData = wSnap.data() as Withdrawal | undefined;
+    if (!wData) throw new Error("Withdrawal not found");
+    if (wData.status !== "pending") {
+      throw new Error(`Withdrawal already processed (${wData.status})`);
+    }
 
     await updateDoc(wRef, { status: "approved", processedAt: serverTimestamp() });
 
-    if (wData) {
-      await updateDoc(doc(db, "users", wData.userId), {
-        pendingBalance: increment(-wData.amount),
-      });
-    }
+    await updateDoc(doc(db, "users", wData.userId), {
+      pendingBalance: increment(-wData.amount),
+    });
     await fetchAllWithdrawals();
   }
 
@@ -251,15 +253,17 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     const wRef = doc(db, "withdrawals", id);
     const wSnap = await getDoc(wRef);
     const wData = wSnap.data() as Withdrawal | undefined;
+    if (!wData) throw new Error("Withdrawal not found");
+    if (wData.status !== "pending") {
+      throw new Error(`Withdrawal already processed (${wData.status})`);
+    }
 
     await updateDoc(wRef, { status: "rejected", processedAt: serverTimestamp(), note: note || "" });
 
-    if (wData) {
-      await updateDoc(doc(db, "users", wData.userId), {
-        balance: increment(wData.amount),
-        pendingBalance: increment(-wData.amount),
-      });
-    }
+    await updateDoc(doc(db, "users", wData.userId), {
+      balance: increment(wData.amount),
+      pendingBalance: increment(-wData.amount),
+    });
     await fetchAllWithdrawals();
   }
 

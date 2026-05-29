@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useWallet } from "@/contexts/WalletContext";
 import { useLocation } from "wouter";
-import { formatCurrency, formatDate, userReward } from "@/lib/utils";
+import { adminRevenueRate, formatCurrency, formatDate, userReward } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -12,17 +12,20 @@ import {
   Clock, Settings, ThumbsUp, ThumbsDown, Download, Link2,
   RefreshCw, Zap, AlertCircle, ShieldX, ShieldOff,
   BarChart3, Copy, Users, DollarSign, TrendingUp, ArrowDownToLine,
-  AlertTriangle, Scale, Filter, Search, ChevronLeft, ChevronRight,
+  AlertTriangle, Scale, Filter, Search, ChevronLeft, ChevronRight, Pencil,
   FileDown, Check
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   collection, addDoc, getDocs, updateDoc, doc, deleteDoc, setDoc,
-  serverTimestamp, Timestamp, increment, getDoc
+  serverTimestamp, Timestamp, increment, getDoc, query, where
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { Task } from "@/contexts/TaskContext";
 import { getSettings, saveSettings, NetworkKeys } from "@/lib/settings";
+import { settleTaskCompletion } from "@/lib/taskSettlement";
+import { settleTaskCompletion as settleWalletCompletion } from "@/lib/walletSettlement";
+import { isManualCompletion } from "@/lib/taskType";
 import {
   fetchUserReconciliation,
   UserReconciliation,
@@ -33,7 +36,7 @@ import {
   ReportComparisonResult,
 } from "@/lib/reconciliation";
 
-type TabType = "withdrawals" | "tasks" | "import" | "postbacks" | "settings" | "analytics" | "reconciliation" | "users";
+type TabType = "withdrawals" | "tasks" | "manualReviews" | "platforms" | "import" | "postbacks" | "settings" | "analytics" | "reconciliation" | "users";
 
 type AdminUser = {
   uid: string; email: string; name: string; role: string;
@@ -80,6 +83,28 @@ interface AdminAlert {
   createdAt: Date;
 }
 
+type ManualTaskCompletion = {
+  id: string;
+  taskId: string;
+  taskTitle: string;
+  taskDescription: string;
+  userId: string;
+  userName: string;
+  userEmail: string;
+  reward: number;
+  status: "pending" | "approved" | "rejected";
+  submittedAt: Date;
+};
+
+type ManagedPlatform = {
+  id: string;
+  name: string;
+  type: string;
+  enabled: boolean;
+  postbackUrl?: string;
+  createdAt: Date;
+};
+
 export default function AdminPage() {
   const { profile, loading: authLoading } = useAuth();
   const [, setLocation] = useLocation();
@@ -98,8 +123,31 @@ export default function AdminPage() {
   const [dashboardWarningEnabled, setDashboardWarningEnabled] = useState(false);
   const [dashboardWarningMessage, setDashboardWarningMessage] = useState("");
 
-  const [newTask, setNewTask] = useState({ title: "", description: "", type: "simple" as "simple" | "premium", reward: "0.005", url: "", platform: "" });
+  const [newTask, setNewTask] = useState({
+    title: "",
+    description: "",
+    type: "simple" as "simple" | "premium",
+    reward: "0.005",
+    url: "",
+    platform: "",
+    taskType: "manual" as "manual" | "platform",
+    manualUserSharePercent: "100",
+  });
   const [addingTask, setAddingTask] = useState(false);
+  const [publishingTaskId, setPublishingTaskId] = useState<string | null>(null);
+  const [reviewingCompletionId, setReviewingCompletionId] = useState<string | null>(null);
+  const [manualCompletions, setManualCompletions] = useState<ManualTaskCompletion[]>([]);
+  const [loadingManualCompletions, setLoadingManualCompletions] = useState(false);
+  const [platforms, setPlatforms] = useState<ManagedPlatform[]>([]);
+  const [loadingPlatforms, setLoadingPlatforms] = useState(false);
+  const [savingPlatformId, setSavingPlatformId] = useState<string | null>(null);
+  const [newPlatform, setNewPlatform] = useState({
+    name: "",
+    type: "manual",
+    postbackUrl: "",
+    enabled: true,
+  });
+  const [editingPlatformId, setEditingPlatformId] = useState<string | null>(null);
 
   const [fetchingNetwork, setFetchingNetwork] = useState<string | null>(null);
   const [importedOffers, setImportedOffers] = useState<Record<string, unknown>[]>([]);
@@ -133,6 +181,7 @@ export default function AdminPage() {
   const [withdrawalFeePercent, setWithdrawalFeePercent] = useState("5");
   const [withdrawalSchedule, setWithdrawalSchedule] = useState<"instant" | "daily" | "weekly">("instant");
   const [allowDuplicateWallets, setAllowDuplicateWallets] = useState(false);
+  const [platformTaskUserSharePercent, setPlatformTaskUserSharePercent] = useState("65");
 
   // Analytics
   const [analytics, setAnalytics] = useState<{
@@ -141,6 +190,8 @@ export default function AdminPage() {
     totalWithdrawalsCount: number;
     pendingWithdrawalsAmount: number;
     approvedWithdrawalsAmount: number;
+    manualTasksApprovedTotal: number;
+    platformTasksRevenue: number;
     totalRevenue: number;
   } | null>(null);
   const [loadingAnalytics, setLoadingAnalytics] = useState(false);
@@ -188,6 +239,8 @@ export default function AdminPage() {
     if (profile.role !== "admin") { setLocation("/dashboard"); return; }
     fetchAllWithdrawals();
     fetchTasks();
+    fetchManualCompletions();
+    fetchPlatforms();
     fetchAdminAlerts();
     getSettings().then((s) => {
       setWithdrawalInstructionText(s.withdrawalInstructionText || "");
@@ -203,6 +256,7 @@ export default function AdminPage() {
       setWithdrawalFeePercent(String(s.withdrawalFeePercent ?? 5));
       setWithdrawalSchedule(s.withdrawalSchedule ?? "instant");
       setAllowDuplicateWallets(s.allowDuplicateWallets ?? false);
+      setPlatformTaskUserSharePercent(String(s.platformTaskUserSharePercent ?? 65));
     });
 
     (async () => {
@@ -240,6 +294,72 @@ export default function AdminPage() {
       }
     })();
   }, [authLoading, profile]);
+
+  async function fetchManualCompletions() {
+    setLoadingManualCompletions(true);
+    try {
+      const pendingQ = query(
+        collection(db, "taskCompletions"),
+        where("status", "==", "pending")
+      );
+      const [pendingSnap, usersSnap, tasksSnap] = await Promise.all([
+        getDocs(pendingQ),
+        getDocs(collection(db, "users")),
+        getDocs(collection(db, "tasks")),
+      ]);
+
+      const usersById = new Map(usersSnap.docs.map((d) => [d.id, d.data() as Record<string, unknown>]));
+      const tasksById = new Map(tasksSnap.docs.map((d) => [d.id, d.data() as Record<string, unknown>]));
+
+      const fetched: ManualTaskCompletion[] = pendingSnap.docs
+        .filter((d) => {
+          const raw = d.data() as Record<string, unknown>;
+          const taskData = tasksById.get(String(raw.taskId || ""));
+          return isManualCompletion(raw, taskData);
+        })
+        .map((d) => {
+          const raw = d.data() as Record<string, unknown>;
+          const userData = usersById.get(String(raw.userId || ""));
+          const taskData = tasksById.get(String(raw.taskId || ""));
+          return {
+            id: d.id,
+            taskId: String(raw.taskId || ""),
+            taskTitle: String(raw.taskTitle || taskData?.title || "Untitled Task"),
+            taskDescription: String(raw.taskDescription || taskData?.description || ""),
+            userId: String(raw.userId || ""),
+            userName: String(raw.userName || userData?.name || "Unknown"),
+            userEmail: String(raw.userEmail || userData?.email || ""),
+            reward: Number(raw.reward || 0),
+            status: (raw.status as ManualTaskCompletion["status"]) || "pending",
+            submittedAt: (raw.completedAt as Timestamp)?.toDate() || new Date(),
+          };
+        });
+
+      fetched.sort((a, b) => b.submittedAt.getTime() - a.submittedAt.getTime());
+      setManualCompletions(fetched);
+    } finally {
+      setLoadingManualCompletions(false);
+    }
+  }
+
+  async function fetchPlatforms() {
+    setLoadingPlatforms(true);
+    try {
+      const snap = await getDocs(collection(db, "platforms"));
+      const fetched: ManagedPlatform[] = snap.docs.map((d) => ({
+        id: d.id,
+        name: String(d.data().name || ""),
+        type: String(d.data().type || "platform"),
+        enabled: d.data().enabled !== false,
+        postbackUrl: d.data().postbackUrl ? String(d.data().postbackUrl) : undefined,
+        createdAt: (d.data().createdAt as Timestamp)?.toDate() || new Date(),
+      }));
+      fetched.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+      setPlatforms(fetched);
+    } finally {
+      setLoadingPlatforms(false);
+    }
+  }
 
   // Auto-import: run on mount (when API keys are loaded) and every 30 minutes
   useEffect(() => {
@@ -396,43 +516,24 @@ export default function AdminPage() {
   async function processPostback(event: PostbackEvent) {
     setProcessingPostback(event.id);
     try {
-      if (event.status === "approved") {
-        // Find the task completion and approve it
-        const completionsSnap = await getDocs(
-          collection(db, "taskCompletions")
-        );
-        const match = completionsSnap.docs.find(
-          (d) => d.data().taskId === event.taskId && d.data().userId === event.userId && d.data().status === "pending"
-        );
-        if (match) {
-          await updateDoc(doc(db, "taskCompletions", match.id), {
-            status: "approved",
-            verifiedBy: event.network,
-            approvedAt: serverTimestamp(),
-          });
-          const completion = match.data();
-          await updateDoc(doc(db, "users", event.userId), {
-            pendingBalance: increment(-(completion.reward as number)),
-            balance: increment(completion.reward as number),
-          });
-        }
-      } else {
-        // Rejected — remove pending balance
-        const completionsSnap = await getDocs(collection(db, "taskCompletions"));
-        const match = completionsSnap.docs.find(
-          (d) => d.data().taskId === event.taskId && d.data().userId === event.userId && d.data().status === "pending"
-        );
-        if (match) {
-          const completion = match.data();
-          await updateDoc(doc(db, "taskCompletions", match.id), {
-            status: "rejected",
-            rejectedBy: event.network,
-            rejectReason: event.reason || "Rejected by network",
-            rejectedAt: serverTimestamp(),
-          });
-          await updateDoc(doc(db, "users", event.userId), {
-            pendingBalance: increment(-(completion.reward as number)),
-          });
+      const completionsSnap = await getDocs(collection(db, "taskCompletions"));
+      const match = completionsSnap.docs.find(
+        (d) =>
+          d.data().taskId === event.taskId &&
+          d.data().userId === event.userId &&
+          d.data().status === "pending" &&
+          (d.data().taskType || "platform") === "platform"
+      );
+
+      if (match) {
+        const result = await settleTaskCompletion(doc(db, "taskCompletions", match.id), event.status, {
+          source: "postback",
+          actorName: event.network,
+          verifiedBy: event.network,
+          reason: event.reason,
+        });
+        if (!result.applied) {
+          toast({ title: "Skipped", description: "Postback already processed before." });
         }
       }
 
@@ -440,6 +541,7 @@ export default function AdminPage() {
       const secret = postbackSecret || networkKeys.postbackSecret || "change-me-in-admin-settings";
       await fetch(`/api/postbacks/${event.id}/mark-processed?secret=${encodeURIComponent(secret)}`, { method: "POST" });
       setPostbacks((prev) => prev.filter((e) => e.id !== event.id));
+      await fetchManualCompletions();
       toast({ title: `✅ Processed — ${event.status}` });
     } catch (e) {
       toast({ title: "Error", description: e instanceof Error ? e.message : "Failed", variant: "destructive" });
@@ -520,6 +622,9 @@ export default function AdminPage() {
         await addDoc(collection(db, "tasks"), {
           title, description, url, platform,
           reward: payout, type: payout >= 0.05 ? "premium" : "simple",
+          taskType: "platform",
+          status: "published",
+          manualAdminRate: 0.35,
           active: true, networkStatus: "pending",
           importedFrom: networkId,
           offerId: String(offer.id || offer.offer_id || ""),
@@ -530,7 +635,7 @@ export default function AdminPage() {
       await fetchTasks();
       setImportedOffers([]);
       setSelectedImportOffers(new Set());
-      toast({ title: `✅ Imported ${imported} tasks`, description: "Set them to Approved in the Tasks tab when ready" });
+      toast({ title: `✅ Imported ${imported} tasks`, description: "Imported as platform tasks." });
     } finally {
       setImportingOffers(false);
     }
@@ -543,11 +648,49 @@ export default function AdminPage() {
     }
     setAddingTask(true);
     try {
-      await addDoc(collection(db, "tasks"), { ...newTask, reward: parseFloat(newTask.reward) || 0, active: true, networkStatus: "pending", createdAt: serverTimestamp() });
-      setNewTask({ title: "", description: "", type: "simple", reward: "0.005", url: "", platform: "" });
+      const parsedUserShare = Math.max(0, Math.min(100, parseFloat(newTask.manualUserSharePercent) || 100));
+      await addDoc(collection(db, "tasks"), {
+        title: newTask.title,
+        description: newTask.description,
+        type: newTask.type,
+        reward: parseFloat(newTask.reward) || 0,
+        url: newTask.url,
+        platform: newTask.platform,
+        taskType: "manual",
+        manualUserSharePercent: parsedUserShare,
+        manualAdminRate: 1 - parsedUserShare / 100,
+        status: "draft",
+        active: true,
+        networkStatus: "approved",
+        createdAt: serverTimestamp(),
+      });
+      setNewTask({
+        title: "",
+        description: "",
+        type: "simple",
+        reward: "0.005",
+        url: "",
+        platform: "",
+        taskType: "manual",
+        manualUserSharePercent: "100",
+      });
       await fetchTasks();
-      toast({ title: "✅ Task added" });
+      toast({ title: "✅ Task created as draft", description: "Use Confirm Publish when ready." });
     } finally { setAddingTask(false); }
+  }
+
+  async function handleConfirmPublishTask(id: string) {
+    setPublishingTaskId(id);
+    try {
+      await updateDoc(doc(db, "tasks", id), {
+        status: "published",
+        publishedAt: serverTimestamp(),
+      });
+      await fetchTasks();
+      toast({ title: "✅ Task published" });
+    } finally {
+      setPublishingTaskId(null);
+    }
   }
 
   async function handleSetNetworkStatus(id: string, status: Task["networkStatus"]) {
@@ -583,6 +726,7 @@ export default function AdminPage() {
         withdrawalFeePercent: parseFloat(withdrawalFeePercent) || 0,
         withdrawalSchedule,
         allowDuplicateWallets,
+        platformTaskUserSharePercent: Math.max(0, Math.min(100, parseFloat(platformTaskUserSharePercent) || 65)),
         dashboardWarningEnabled,
         dashboardWarningMessage,
       }, { merge: true });
@@ -624,13 +768,35 @@ export default function AdminPage() {
         }
       });
 
-      const completionsSnap = await getDocs(collection(db, "taskCompletions"));
-      let totalRevenue = 0;
+      const settings = await getSettings();
+      const platformUserShare = settings.platformTaskUserSharePercent ?? 65;
+
+      const [completionsSnap, tasksSnap] = await Promise.all([
+        getDocs(collection(db, "taskCompletions")),
+        getDocs(collection(db, "tasks")),
+      ]);
+      const tasksById = new Map(tasksSnap.docs.map((d) => [d.id, d.data() as Record<string, unknown>]));
+
+      let manualTasksApprovedTotal = 0;
+      let platformTasksRevenue = 0;
       completionsSnap.docs.forEach((d) => {
-        if (d.data().status === "approved") {
-          const reward = (d.data().reward as number) || 0;
-          totalRevenue += reward * 0.35;
+        if (d.data().status !== "approved") return;
+
+        const raw = d.data() as Record<string, unknown>;
+        const taskData = tasksById.get(String(raw.taskId || ""));
+        const isManual = isManualCompletion(raw, taskData);
+
+        if (isManual) {
+          manualTasksApprovedTotal += Number(raw.reward || 0);
+          return;
         }
+
+        const adminPrice =
+          typeof raw.adminReward === "number"
+            ? (raw.adminReward as number)
+            : Number(taskData?.reward || 0);
+
+        platformTasksRevenue += adminPrice * adminRevenueRate("platform", undefined, platformUserShare);
       });
 
       setAnalytics({
@@ -639,7 +805,9 @@ export default function AdminPage() {
         totalWithdrawalsCount: wSnap.size,
         pendingWithdrawalsAmount,
         approvedWithdrawalsAmount,
-        totalRevenue,
+        manualTasksApprovedTotal,
+        platformTasksRevenue,
+        totalRevenue: manualTasksApprovedTotal + platformTasksRevenue,
       });
     } finally {
       setLoadingAnalytics(false);
@@ -647,7 +815,19 @@ export default function AdminPage() {
   }
 
   async function handleApproveWithdrawal(id: string) {
-    try { await approveWithdrawal(id); toast({ title: "✅ Approved" }); }
+    try {
+      if (!globalRecon?.isBalanced) {
+        throw new Error("Approval disabled until global reconciliation shows 100% match.");
+      }
+      const w = allWithdrawals.find((x) => x.id === id);
+      if (!w) throw new Error("Withdrawal not found");
+      const recon = reconciliations[w.userId];
+      if (!recon || recon.status !== "clean") {
+        throw new Error("Approval blocked until reconciliation is 100% clean.");
+      }
+      await approveWithdrawal(id);
+      toast({ title: "✅ Approved" });
+    }
     catch (e: unknown) { toast({ title: "Error", description: e instanceof Error ? e.message : "Failed", variant: "destructive" }); }
   }
 
@@ -734,6 +914,9 @@ export default function AdminPage() {
               platform: network.name,
               reward: payout,
               type: payout >= 0.05 ? "premium" : "simple",
+              taskType: "platform",
+              status: "published",
+              manualAdminRate: 0.35,
               active: true,
               networkStatus: "pending",
               importedFrom: network.id,
@@ -778,6 +961,103 @@ export default function AdminPage() {
       toast({ title: "Parse Error", description: e instanceof Error ? e.message : "Invalid JSON format.", variant: "destructive" });
     } finally {
       setComparingReport(false);
+    }
+  }
+
+  async function handleManualCompletionDecision(completionId: string, decision: "approved" | "rejected") {
+    const item = manualCompletions.find((c) => c.id === completionId);
+    if (!item) {
+      toast({ title: "Error", description: "Completion not found in list.", variant: "destructive" });
+      return;
+    }
+
+    setReviewingCompletionId(completionId);
+    try {
+      const action = decision === "approved" ? "approve" : "reject";
+      const result = await settleWalletCompletion(
+        item.userId,
+        completionId,
+        item.reward,
+        action,
+        {
+          source: "manual_admin_review",
+          actorId: profile?.uid,
+          actorName: profile?.name || "admin",
+          reason: decision === "rejected" ? "Rejected during manual task review" : undefined,
+        }
+      );
+
+      if (!result.success) {
+        throw new Error(result.message || "Settlement failed");
+      }
+      if (!result.applied) {
+        toast({ title: "Skipped", description: result.message || "This completion was already processed." });
+      } else {
+        toast({
+          title: decision === "approved" ? "✅ Completion approved" : "Completion rejected",
+          description: decision === "approved"
+            ? "Wallet balances updated and transaction recorded."
+            : "Pending reward removed from user wallet.",
+        });
+      }
+
+      await fetchManualCompletions();
+      if (analytics) await fetchAnalytics();
+    } catch (e) {
+      toast({ title: "Error", description: e instanceof Error ? e.message : "Failed", variant: "destructive" });
+    } finally {
+      setReviewingCompletionId(null);
+    }
+  }
+
+  async function handleAddPlatform() {
+    if (!newPlatform.name.trim()) {
+      toast({ title: "Missing name", description: "Platform name is required.", variant: "destructive" });
+      return;
+    }
+    setSavingPlatformId("new");
+    try {
+      await addDoc(collection(db, "platforms"), {
+        name: newPlatform.name.trim(),
+        type: newPlatform.type.trim() || "manual",
+        enabled: newPlatform.enabled,
+        postbackUrl: newPlatform.postbackUrl.trim() || null,
+        createdAt: serverTimestamp(),
+      });
+      setNewPlatform({ name: "", type: "manual", postbackUrl: "", enabled: true });
+      await fetchPlatforms();
+      toast({ title: "✅ Platform added" });
+    } finally {
+      setSavingPlatformId(null);
+    }
+  }
+
+  async function handleSavePlatform(platform: ManagedPlatform) {
+    setSavingPlatformId(platform.id);
+    try {
+      await updateDoc(doc(db, "platforms", platform.id), {
+        name: platform.name.trim(),
+        type: platform.type.trim() || "manual",
+        enabled: platform.enabled,
+        postbackUrl: platform.postbackUrl?.trim() || null,
+        updatedAt: serverTimestamp(),
+      });
+      await fetchPlatforms();
+      setEditingPlatformId(null);
+      toast({ title: "✅ Platform updated" });
+    } finally {
+      setSavingPlatformId(null);
+    }
+  }
+
+  async function handleDeletePlatform(platformId: string) {
+    setSavingPlatformId(platformId);
+    try {
+      await deleteDoc(doc(db, "platforms", platformId));
+      await fetchPlatforms();
+      toast({ title: "Platform deleted" });
+    } finally {
+      setSavingPlatformId(null);
     }
   }
 
@@ -915,6 +1195,10 @@ export default function AdminPage() {
   }
 
   async function handleBulkApprove() {
+    if (!globalRecon?.isBalanced) {
+      toast({ title: "Blocked", description: "Bulk approval requires a 100% reconciliation match.", variant: "destructive" });
+      return;
+    }
     const toApprove = [...selectedWIds].filter((id) => {
       const w = allWithdrawals.find((x) => x.id === id);
       if (!w || w.status !== "pending") return false;
@@ -984,6 +1268,8 @@ export default function AdminPage() {
     { id: "withdrawals", label: `Withdrawals (${pendingWithdrawals.length})`, alertCount: adminAlerts.length },
     { id: "reconciliation", label: "Reconciliation" },
     { id: "tasks", label: "Tasks" },
+    { id: "manualReviews", label: `Manual Task Reviews (${manualCompletions.length})` },
+    { id: "platforms", label: "Platforms" },
     { id: "import", label: "Import Tasks" },
     { id: "postbacks", label: `Postbacks (${postbacks.length})` },
     { id: "analytics", label: "Analytics" },
@@ -1065,6 +1351,7 @@ export default function AdminPage() {
             setTab(t.id);
             if (t.id === "postbacks") fetchPostbacks();
             if (t.id === "analytics") fetchAnalytics();
+            if (t.id === "manualReviews") fetchManualCompletions();
             if (t.id === "reconciliation") handleFetchGlobalRecon();
             if (t.id === "users") fetchAllUsers();
           }}
@@ -1895,9 +2182,23 @@ export default function AdminPage() {
                 </select>
                 <Input type="text" inputMode="decimal" step="any" lang="en" placeholder="Reward (e.g. 0.005)" value={newTask.reward} onChange={(e) => setNewTask({ ...newTask, reward: e.target.value })} className="bg-white/10 border-white/20 text-white placeholder:text-white/30" />
               </div>
+              <Input
+                type="text"
+                inputMode="decimal"
+                step="0.01"
+                lang="en"
+                placeholder="User Share % (0-100, default 100)"
+                value={newTask.manualUserSharePercent}
+                onChange={(e) => {
+                  const pct = Math.max(0, Math.min(100, parseFloat(e.target.value) || 0));
+                  setNewTask({ ...newTask, manualUserSharePercent: String(pct) });
+                }}
+                className="bg-white/10 border-white/20 text-white placeholder:text-white/30"
+              />
               {parseFloat(newTask.reward) > 0 && (
                 <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2 text-xs text-emerald-300">
-                  Users earn: <span className="font-bold">{formatCurrency(userReward(parseFloat(newTask.reward) || 0))}</span><span className="text-white/40 ml-1">(65% of {formatCurrency(parseFloat(newTask.reward) || 0)})</span>
+                  Users earn: <span className="font-bold">{formatCurrency(userReward(parseFloat(newTask.reward) || 0, "manual", { manualUserSharePercent: parseFloat(newTask.manualUserSharePercent) || 100 }))}</span>
+                  <span className="text-white/40 ml-1">({parseFloat(newTask.manualUserSharePercent) || 100}% user share — ignores platform settings)</span>
                 </div>
               )}
               <Button onClick={handleAddTask} disabled={addingTask} className="bg-emerald-500 hover:bg-emerald-400 text-white rounded-xl">
@@ -1919,10 +2220,20 @@ export default function AdminPage() {
                           <div className="flex items-center gap-2 mb-1 flex-wrap">
                             <span className="text-sm font-medium text-white truncate">{t.title}</span>
                             <Badge className={cn("text-xs shrink-0", t.type === "premium" ? "bg-amber-500/20 text-amber-300" : "bg-blue-500/20 text-blue-300")}>{t.type}</Badge>
+                            <Badge className={cn("text-xs shrink-0 border", t.taskType === "manual" ? "bg-purple-500/20 text-purple-300 border-purple-500/30" : "bg-cyan-500/20 text-cyan-300 border-cyan-500/30")}>
+                              {t.taskType || "platform"}
+                            </Badge>
+                            <Badge className={cn("text-xs shrink-0 border", t.status === "published" ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30" : "bg-slate-500/20 text-slate-300 border-slate-500/30")}>
+                              {t.status || "published"}
+                            </Badge>
                             <Badge className={cn("text-xs shrink-0 border", ns.cls)}>{ns.label}</Badge>
                           </div>
                           <p className="text-xs text-white/40">
-                            {t.platform} • Admin: {formatCurrency(t.reward)} → User: <span className="text-emerald-400">{formatCurrency(userReward(t.reward))}</span>
+                            {t.platform} • Task value: {formatCurrency(t.reward)} → User: <span className="text-emerald-400">{formatCurrency(
+                              (t.taskType || "platform") === "manual"
+                                ? userReward(t.reward, "manual", { manualUserSharePercent: t.manualUserSharePercent, manualAdminRate: t.manualAdminRate })
+                                : userReward(t.reward, "platform", { platformUserSharePercent: parseFloat(platformTaskUserSharePercent) || 65 })
+                            )}</span>
                           </p>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
@@ -1934,6 +2245,18 @@ export default function AdminPage() {
                         </div>
                       </div>
                       <div className="flex gap-2 pt-2 border-t border-white/5">
+                        {t.status !== "published" && (
+                          <Button
+                            size="sm"
+                            onClick={() => handleConfirmPublishTask(t.id)}
+                            disabled={publishingTaskId === t.id}
+                            className="flex-1 bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-500/30 rounded-lg text-xs h-8"
+                            variant="outline"
+                          >
+                            {publishingTaskId === t.id ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Check className="w-3 h-3 mr-1" />}
+                            Confirm Publish
+                          </Button>
+                        )}
                         {t.networkStatus !== "approved" && (
                           <Button size="sm" onClick={() => handleSetNetworkStatus(t.id, "approved")}
                             className="flex-1 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 rounded-lg text-xs h-8" variant="outline">
@@ -1951,6 +2274,150 @@ export default function AdminPage() {
                   );
                 })}</div>
             }
+          </div>
+        </div>
+      )}
+
+      {/* === MANUAL TASK REVIEWS === */}
+      {tab === "manualReviews" && (
+        <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
+          <div className="flex items-center justify-between mb-4 gap-3">
+            <h2 className="font-semibold text-white">Manual Task Reviews ({manualCompletions.length})</h2>
+            <Button size="sm" variant="outline" onClick={fetchManualCompletions} disabled={loadingManualCompletions}
+              className="border-white/20 text-white/60 hover:text-white h-8">
+              <RefreshCw className={cn("w-3.5 h-3.5", loadingManualCompletions && "animate-spin")} />
+            </Button>
+          </div>
+          {loadingManualCompletions ? (
+            <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin text-emerald-400" /></div>
+          ) : manualCompletions.length === 0 ? (
+            <p className="text-white/40 text-center py-8 text-sm">No pending manual task reviews.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-white/50 border-b border-white/10">
+                    <th className="py-2 pr-3 font-medium">User</th>
+                    <th className="py-2 pr-3 font-medium">Task</th>
+                    <th className="py-2 pr-3 font-medium">Reward</th>
+                    <th className="py-2 pr-3 font-medium">Submitted</th>
+                    <th className="py-2 pr-3 font-medium">Status</th>
+                    <th className="py-2 font-medium text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {manualCompletions.map((c) => (
+                    <tr key={c.id} className="border-b border-white/5 last:border-0">
+                      <td className="py-3 pr-3 align-top">
+                        <p className="text-white font-medium">{c.userName}</p>
+                        <p className="text-xs text-white/40">{c.userEmail}</p>
+                      </td>
+                      <td className="py-3 pr-3 align-top min-w-[180px]">
+                        <p className="text-white">{c.taskTitle}</p>
+                        {c.taskDescription && (
+                          <p className="text-xs text-white/40 mt-0.5 line-clamp-2">{c.taskDescription}</p>
+                        )}
+                      </td>
+                      <td className="py-3 pr-3 align-top text-emerald-400 font-medium whitespace-nowrap">
+                        {formatCurrency(c.reward)}
+                      </td>
+                      <td className="py-3 pr-3 align-top text-white/60 whitespace-nowrap text-xs">
+                        {formatDate(c.submittedAt)}
+                      </td>
+                      <td className="py-3 pr-3 align-top">
+                        <Badge className="text-xs border bg-amber-500/20 text-amber-300 border-amber-500/30">pending</Badge>
+                      </td>
+                      <td className="py-3 align-top">
+                        <div className="flex justify-end gap-2">
+                          <Button
+                            size="sm"
+                            onClick={() => handleManualCompletionDecision(c.id, "approved")}
+                            disabled={reviewingCompletionId === c.id}
+                            className="bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30"
+                            variant="outline"
+                          >
+                            {reviewingCompletionId === c.id ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <ThumbsUp className="w-3 h-3 mr-1" />}
+                            Approve
+                          </Button>
+                          <Button
+                            size="sm"
+                            onClick={() => handleManualCompletionDecision(c.id, "rejected")}
+                            disabled={reviewingCompletionId === c.id}
+                            className="bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30"
+                            variant="outline"
+                          >
+                            {reviewingCompletionId === c.id ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <ThumbsDown className="w-3 h-3 mr-1" />}
+                            Reject
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* === PLATFORMS === */}
+      {tab === "platforms" && (
+        <div className="space-y-4">
+          <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
+            <h2 className="font-semibold text-white mb-4">Add Platform</h2>
+            <div className="grid md:grid-cols-4 gap-3">
+              <Input placeholder="Name" value={newPlatform.name} onChange={(e) => setNewPlatform({ ...newPlatform, name: e.target.value })} className="bg-white/10 border-white/20 text-white" />
+              <Input placeholder="Type (manual/platform)" value={newPlatform.type} onChange={(e) => setNewPlatform({ ...newPlatform, type: e.target.value })} className="bg-white/10 border-white/20 text-white" />
+              <Input placeholder="Postback URL (optional)" value={newPlatform.postbackUrl} onChange={(e) => setNewPlatform({ ...newPlatform, postbackUrl: e.target.value })} className="bg-white/10 border-white/20 text-white" />
+              <Button onClick={handleAddPlatform} disabled={savingPlatformId === "new"} className="bg-emerald-500 hover:bg-emerald-400 text-white">
+                {savingPlatformId === "new" ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <Plus className="w-4 h-4 mr-1" />}
+                Add Platform
+              </Button>
+            </div>
+          </div>
+
+          <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
+            <h2 className="font-semibold text-white mb-4">Platforms ({platforms.length})</h2>
+            {loadingPlatforms ? (
+              <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin text-emerald-400" /></div>
+            ) : platforms.length === 0 ? (
+              <p className="text-white/40 text-center py-6 text-sm">No platforms yet</p>
+            ) : (
+              <div className="space-y-3">
+                {platforms.map((p) => {
+                  const isEditing = editingPlatformId === p.id;
+                  return (
+                    <div key={p.id} className="rounded-xl border border-white/10 bg-white/5 p-4">
+                      <div className="grid md:grid-cols-4 gap-3">
+                        <Input value={p.name} disabled={!isEditing} onChange={(e) => setPlatforms((prev) => prev.map((x) => x.id === p.id ? { ...x, name: e.target.value } : x))} className="bg-white/10 border-white/20 text-white disabled:opacity-60" />
+                        <Input value={p.type} disabled={!isEditing} onChange={(e) => setPlatforms((prev) => prev.map((x) => x.id === p.id ? { ...x, type: e.target.value } : x))} className="bg-white/10 border-white/20 text-white disabled:opacity-60" />
+                        <Input value={p.postbackUrl || ""} disabled={!isEditing} onChange={(e) => setPlatforms((prev) => prev.map((x) => x.id === p.id ? { ...x, postbackUrl: e.target.value } : x))} className="bg-white/10 border-white/20 text-white disabled:opacity-60" />
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => setPlatforms((prev) => prev.map((x) => x.id === p.id ? { ...x, enabled: !x.enabled } : x))} className={cn("w-10 h-5 rounded-full transition-all relative", p.enabled ? "bg-emerald-500" : "bg-white/20")}>
+                            <span className={cn("absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all", p.enabled ? "right-0.5" : "left-0.5")} />
+                          </button>
+                          <span className="text-xs text-white/60">{p.enabled ? "Enabled" : "Disabled"}</span>
+                        </div>
+                      </div>
+                      <div className="flex gap-2 mt-3 pt-3 border-t border-white/5">
+                        {!isEditing ? (
+                          <Button size="sm" variant="outline" onClick={() => setEditingPlatformId(p.id)} className="border-white/20 text-white/70">
+                            <Pencil className="w-3 h-3 mr-1" />Edit
+                          </Button>
+                        ) : (
+                          <Button size="sm" onClick={() => handleSavePlatform(p)} disabled={savingPlatformId === p.id} className="bg-emerald-500 hover:bg-emerald-400 text-white">
+                            {savingPlatformId === p.id ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Check className="w-3 h-3 mr-1" />}Save
+                          </Button>
+                        )}
+                        <Button size="sm" variant="outline" onClick={() => handleDeletePlatform(p.id)} disabled={savingPlatformId === p.id} className="border-red-500/30 text-red-400">
+                          <Trash2 className="w-3 h-3 mr-1" />Delete
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -2178,7 +2645,7 @@ export default function AdminPage() {
             <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-purple-400" /></div>
           ) : analytics ? (
             <>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div className="bg-blue-500/10 border border-blue-500/20 rounded-2xl p-5">
                   <div className="flex items-center gap-2 mb-2">
                     <Users className="w-4 h-4 text-blue-400" />
@@ -2189,9 +2656,25 @@ export default function AdminPage() {
                 <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-2xl p-5">
                   <div className="flex items-center gap-2 mb-2">
                     <DollarSign className="w-4 h-4 text-emerald-400" />
-                    <span className="text-xs text-emerald-300/70">Platform Revenue (35%)</span>
+                    <span className="text-xs text-emerald-300/70">Total Revenue</span>
                   </div>
                   <div className="text-3xl font-bold text-white">{formatCurrency(analytics.totalRevenue)}</div>
+                </div>
+                <div className="bg-purple-500/10 border border-purple-500/20 rounded-2xl p-5">
+                  <div className="flex items-center gap-2 mb-2">
+                    <DollarSign className="w-4 h-4 text-purple-400" />
+                    <span className="text-xs text-purple-300/70">Manual Tasks Approved Total</span>
+                  </div>
+                  <div className="text-3xl font-bold text-white">{formatCurrency(analytics.manualTasksApprovedTotal)}</div>
+                  <p className="text-xs text-white/40 mt-1">Full approved payout (no split applied)</p>
+                </div>
+                <div className="bg-cyan-500/10 border border-cyan-500/20 rounded-2xl p-5">
+                  <div className="flex items-center gap-2 mb-2">
+                    <DollarSign className="w-4 h-4 text-cyan-400" />
+                    <span className="text-xs text-cyan-300/70">Platform Tasks Revenue</span>
+                  </div>
+                  <div className="text-3xl font-bold text-white">{formatCurrency(analytics.platformTasksRevenue)}</div>
+                  <p className="text-xs text-white/40 mt-1">Admin share ({100 - (parseFloat(platformTaskUserSharePercent) || 65)}%)</p>
                 </div>
                 <div className="bg-purple-500/10 border border-purple-500/20 rounded-2xl p-5">
                   <div className="flex items-center gap-2 mb-2">
@@ -2508,6 +2991,23 @@ export default function AdminPage() {
                       className="bg-white/10 border-white/20 text-white" />
                   </div>
                 </div>
+              </div>
+
+              {/* Platform task revenue split */}
+              <div className="mb-4 pb-4 border-b border-white/10">
+                <label className="text-xs text-white/50 block mb-1">Platform Task User Share %</label>
+                <Input
+                  type="text"
+                  inputMode="decimal"
+                  pattern="[0-9.]*"
+                  lang="en"
+                  value={platformTaskUserSharePercent}
+                  onChange={(e) => setPlatformTaskUserSharePercent(e.target.value)}
+                  className="bg-white/10 border-white/20 text-white max-w-xs"
+                />
+                <p className="text-xs text-white/30 mt-1">
+                  Default 65 (user) / 35 (admin). Applies to platform tasks only — manual tasks use the share set when creating each task.
+                </p>
               </div>
 
               {/* Commission & Schedule */}

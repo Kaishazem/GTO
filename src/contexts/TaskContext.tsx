@@ -19,12 +19,18 @@ import {
 import { db } from "@/lib/firebase";
 import { useAuth } from "./AuthContext";
 import { userReward } from "@/lib/utils";
+import { inferTaskType } from "@/lib/taskType";
+import { getSettings } from "@/lib/settings";
 
 export interface Task {
   id: string;
   title: string;
   description: string;
   type: "simple" | "premium";
+  taskType: "manual" | "platform";
+  status: "draft" | "published";
+  manualAdminRate?: number;
+  manualUserSharePercent?: number;
   reward: number;
   url: string;
   platform: string;
@@ -40,6 +46,9 @@ export interface TaskCompletion {
   completedAt: Date;
   reward: number;
   status: "pending" | "approved" | "rejected";
+  taskTitle?: string;
+  taskDescription?: string;
+  taskType?: "manual" | "platform";
   verifiedBy?: string;
 }
 
@@ -79,6 +88,10 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
       title: data.title || "",
       description: data.description || "",
       type: data.type || "simple",
+      taskType: (data.taskType as Task["taskType"]) || "platform",
+      status: (data.status as Task["status"]) || "published",
+      manualAdminRate: typeof data.manualAdminRate === "number" ? data.manualAdminRate : undefined,
+      manualUserSharePercent: typeof data.manualUserSharePercent === "number" ? data.manualUserSharePercent : undefined,
       reward: data.reward || 0,
       url: data.url || "",
       platform: data.platform || "",
@@ -100,7 +113,7 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
       const snap = await getDocs(q);
       const fetched = snap.docs
         .map(mapTask)
-        .filter((t) => t.networkStatus === "approved");
+        .filter((t) => t.networkStatus === "approved" && t.status === "published");
       fetched.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
       setTasks(fetched);
       setLastDoc(snap.docs[snap.docs.length - 1] || null);
@@ -123,7 +136,7 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
       const snap = await getDocs(q);
       const fetched = snap.docs
         .map(mapTask)
-        .filter((t) => t.networkStatus === "approved");
+        .filter((t) => t.networkStatus === "approved" && t.status === "published");
       fetched.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
       setTasks((prev) => [...prev, ...fetched]);
       setLastDoc(snap.docs[snap.docs.length - 1] || null);
@@ -147,6 +160,9 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
       completedAt: (d.data().completedAt as Timestamp)?.toDate() || new Date(),
       reward: d.data().reward || 0,
       status: d.data().status || "pending",
+      taskTitle: d.data().taskTitle,
+      taskDescription: d.data().taskDescription,
+      taskType: d.data().taskType,
       verifiedBy: d.data().verifiedBy,
     }));
     fetched.sort((a, b) => b.completedAt.getTime() - a.completedAt.getTime());
@@ -163,22 +179,43 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
 
     const taskDoc = await getDoc(doc(db, "tasks", taskId));
     if (!taskDoc.exists()) throw new Error("Task not found");
+    const rawTask = taskDoc.data() as Record<string, unknown>;
     const taskData = taskDoc.data() as Task;
 
     if (taskData.networkStatus !== "approved") {
       throw new Error("This task is not approved yet");
     }
 
-    const earned = userReward(taskData.reward);
+    if (taskData.status && taskData.status !== "published") {
+      throw new Error("This task is not published yet");
+    }
+
+    const taskType = inferTaskType(rawTask);
+    const adminReward = Number(taskData.reward || 0);
+    const settings = await getSettings();
+
+    const earned =
+      taskType === "manual"
+        ? userReward(adminReward, "manual", {
+            manualUserSharePercent: taskData.manualUserSharePercent,
+            manualAdminRate: taskData.manualAdminRate,
+          })
+        : userReward(adminReward, "platform", {
+            platformUserSharePercent: settings.platformTaskUserSharePercent,
+          });
 
     await addDoc(collection(db, "taskCompletions"), {
       taskId,
       userId: user.uid,
       completedAt: serverTimestamp(),
       reward: earned,
+      adminReward,
       status: "pending",
       taskTitle: taskData.title,
-      taskType: taskData.type,
+      taskDescription: taskData.description || "",
+      taskType,
+      manualAdminRate: taskData.manualAdminRate ?? null,
+      manualUserSharePercent: taskData.manualUserSharePercent ?? null,
       taskPlatform: taskData.platform,
     });
 

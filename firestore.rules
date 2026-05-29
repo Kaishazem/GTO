@@ -84,5 +84,19 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // ── platforms/{platformId} ─────────────────────────────────────────────
+    // Authenticated users can read enabled platforms; admins manage all.
+    match /platforms/{platformId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // ── walletTransactions/{txId} ──────────────────────────────────────────
+    // Users can read their own wallet transaction logs; admins can read/write all.
+    match /walletTransactions/{txId} {
+      allow create, update, delete: if isAdmin();
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+    }
+
   }
 }

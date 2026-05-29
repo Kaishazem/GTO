@@ -1,7 +1,8 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useTask } from "@/contexts/TaskContext";
 import { useAuth } from "@/contexts/AuthContext";
-import { formatCurrency, userReward } from "@/lib/utils";
+import { formatCurrency, formatDate, userReward } from "@/lib/utils";
+import { getSettings } from "@/lib/settings";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -14,7 +15,13 @@ export default function TasksPage() {
   const { toast } = useToast();
   const [filter, setFilter] = useState<"all" | "simple" | "premium">("all");
   const [platformFilter, setPlatformFilter] = useState<string>("all");
+  const [activityFilter, setActivityFilter] = useState<"all" | "pending" | "approved" | "rejected">("all");
   const [completing, setCompleting] = useState<string | null>(null);
+  const [platformUserSharePercent, setPlatformUserSharePercent] = useState(65);
+
+  useEffect(() => {
+    getSettings().then((s) => setPlatformUserSharePercent(s.platformTaskUserSharePercent ?? 65));
+  }, []);
 
   const completedIds = new Set(completions.map((c) => c.taskId));
 
@@ -28,6 +35,10 @@ export default function TasksPage() {
     const platformMatch = platformFilter === "all" || t.platform === platformFilter;
     return typeMatch && platformMatch;
   });
+
+  const activityItems = completions
+    .filter((c) => activityFilter === "all" || c.status === activityFilter)
+    .sort((a, b) => b.completedAt.getTime() - a.completedAt.getTime());
 
   async function handleComplete(taskId: string, url: string) {
     setCompleting(taskId);
@@ -130,7 +141,13 @@ export default function TasksPage() {
             {filtered.map((task) => {
               const done = completedIds.has(task.id);
               const isLoading = completing === task.id;
-              const displayReward = userReward(task.reward);
+              const displayReward =
+                (task.taskType || "platform") === "manual"
+                  ? userReward(task.reward, "manual", {
+                      manualUserSharePercent: task.manualUserSharePercent,
+                      manualAdminRate: task.manualAdminRate,
+                    })
+                  : userReward(task.reward, "platform", { platformUserSharePercent });
               const completion = completions.find((c) => c.taskId === task.id);
               return (
                 <div
@@ -225,6 +242,64 @@ export default function TasksPage() {
           )}
         </>
       )}
+
+      {/* Task History / My Activity */}
+      <div className="bg-white/5 border border-white/10 rounded-2xl p-6">
+        <h2 className="text-xl font-bold text-white mb-1">My Activity</h2>
+        <p className="text-sm text-white/50 mb-4">Your task completion history</p>
+
+        <div className="flex gap-2 flex-wrap mb-4">
+          {(["all", "pending", "approved", "rejected"] as const).map((f) => (
+            <button
+              key={f}
+              onClick={() => setActivityFilter(f)}
+              className={cn(
+                "px-3 py-1.5 rounded-lg text-xs font-medium transition-all capitalize",
+                activityFilter === f
+                  ? "bg-emerald-500 text-white"
+                  : "bg-white/5 text-white/50 hover:bg-white/10"
+              )}
+            >
+              {f === "all" ? `All (${completions.length})` : `${f} (${completions.filter((c) => c.status === f).length})`}
+            </button>
+          ))}
+        </div>
+
+        {activityItems.length === 0 ? (
+          <p className="text-center text-white/40 py-8 text-sm">No activity yet</p>
+        ) : (
+          <div className="space-y-3">
+            {activityItems.map((c) => (
+              <div key={c.id} className="flex items-center justify-between gap-3 py-3 border-b border-white/5 last:border-0">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-white truncate">
+                    {c.taskTitle || `Task ${c.taskId.slice(0, 8)}`}
+                  </p>
+                  <div className="flex items-center gap-2 mt-1 flex-wrap">
+                    <Badge className={cn("text-xs border", {
+                      "bg-amber-500/20 text-amber-300 border-amber-500/30": c.status === "pending",
+                      "bg-emerald-500/20 text-emerald-300 border-emerald-500/30": c.status === "approved",
+                      "bg-red-500/20 text-red-300 border-red-500/30": c.status === "rejected",
+                    })}>
+                      {c.status === "pending" ? "🟡 Pending" : c.status === "approved" ? "🟢 Approved" : "🔴 Rejected"}
+                    </Badge>
+                    <Badge className={cn(
+                      "text-xs border",
+                      c.taskType === "manual"
+                        ? "bg-purple-500/20 text-purple-300 border-purple-500/30"
+                        : "bg-cyan-500/20 text-cyan-300 border-cyan-500/30"
+                    )}>
+                      {c.taskType === "manual" ? "Manual" : "Platform"}
+                    </Badge>
+                    <span className="text-xs text-white/30">{formatDate(c.completedAt)}</span>
+                  </div>
+                </div>
+                <span className="text-sm font-semibold text-emerald-400 shrink-0">+{formatCurrency(c.reward)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

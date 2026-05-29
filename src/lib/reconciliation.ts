@@ -177,8 +177,8 @@ export async function fetchGlobalReconciliation(
   const pending = allCompletions.filter((c) => c.status === "pending");
 const approved = allCompletions.filter((c) => c.status === "approved");
 const rejected = allCompletions.filter((c) => c.status === "rejected");
-const verified = approved.filter((c) => !c.verifiedBy);
-const unverified = approved.filter((c) => c.verifiedBy);
+const verified = approved.filter((c) => !!c.verifiedBy);
+const unverified = approved.filter((c) => !c.verifiedBy);
 
   const totalMatchedAmount = verified.reduce((s, c) => s + c.reward, 0);
   const totalRejectedAmount = rejected.reduce((s, c) => s + c.reward, 0);

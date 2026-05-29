@@ -23,6 +23,8 @@ export interface AppSettings {
   withdrawalSchedule: "instant" | "daily" | "weekly";
   networkKeys?: NetworkKeys;
   allowDuplicateWallets?: boolean;
+  /** User share % for platform tasks only (default 65). Manual tasks ignore this. */
+  platformTaskUserSharePercent?: number;
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -38,6 +40,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   withdrawalSchedule: "instant",
   networkKeys: {},
   allowDuplicateWallets: false,
+  platformTaskUserSharePercent: 65,
 };
 
 export async function getSettings(): Promise<AppSettings> {
