@@ -1,0 +1,33 @@
+I need a complete refactor of the Admin Tasks page and related financial logic based on these exact requirements:
+
+1. 📂 UI Restructuring (Admin Tasks Page):
+Divide the page into 3 clear, persistent sections:
+
+   🔹 Section 1: Task List
+   - Shows all tasks awaiting publishing confirmation.
+   - REMOVE the "Approved" label and "Revoke" button completely.
+   - Keep Start/Stop/Delete controls intact.
+   - CRITICAL: Tasks in this list must NEVER disappear, even after status changes.
+
+   🔹 Section 2: Manual Task Reviews
+   - Move this section here (it was previously a separate page/tab).
+   - CRITICAL: Task cards must NEVER disappear after Approve/Reject. They must remain visible with their updated status so I can review, track history, or change the decision later.
+
+   🔹 Section 3: Financial Dashboard
+   Split financials into two distinct blocks:
+   - Block A (100% User Tasks): For tasks where I set 100% share for the user (external payments). Show a single summary card: "Total Amount to Pay Users".
+   - Block B (Split Tasks <100%): For tasks with custom splits (e.g., 50% user / 50% site). Show two cards: "Total to Pay Users" and "Site Profit" (the remaining percentage kept by the platform).
+
+2. 📊 Analytics Update:
+- Update the `Manual Task Approved Total` card in the main Analytics dashboard. 
+- Instead of showing the count of tasks, it must display the "Site Profit" value calculated from Block B above.
+
+3.  Data Reset for Testing:
+- Write and execute a secure Node.js script (or provide exact terminal commands) to safely delete ALL existing manual tasks from Firestore and reset ALL related user balances/wallets to zero. I need a completely clean slate to test these new calculations with fresh data.
+
+4. ️ Technical Notes:
+- Maintain existing Firebase structure but update queries/state logic to match these rules.
+- Ensure all calculations accurately reflect the custom percentages I set for each manual task.
+- Verify that UI updates are reactive and persistent.
+
+Please implement these changes step-by-step, run the data cleanup script, and confirm when the environment is ready for me to test with new tasks.

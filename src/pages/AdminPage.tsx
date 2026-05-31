@@ -92,6 +92,7 @@ type ManualTaskCompletion = {
   userName: string;
   userEmail: string;
   reward: number;
+  manualUserSharePercent: number;
   status: "pending" | "approved" | "rejected";
   submittedAt: Date;
 };
@@ -218,6 +219,10 @@ export default function AdminPage() {
   // Fraud-detection alerts
   const [adminAlerts, setAdminAlerts] = useState<AdminAlert[]>([]);
 
+  // Data reset
+  const [resetting, setResetting] = useState(false);
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+
   // Withdrawal filter / search / bulk / modals
   const [wFilter, setWFilter] = useState<"all" | "pending" | "approved" | "rejected">("pending");
   const [wSearch, setWSearch] = useState("");
@@ -298,12 +303,8 @@ export default function AdminPage() {
   async function fetchManualCompletions() {
     setLoadingManualCompletions(true);
     try {
-      const pendingQ = query(
-        collection(db, "taskCompletions"),
-        where("status", "==", "pending")
-      );
-      const [pendingSnap, usersSnap, tasksSnap] = await Promise.all([
-        getDocs(pendingQ),
+      const [allCompletionsSnap, usersSnap, tasksSnap] = await Promise.all([
+        getDocs(collection(db, "taskCompletions")),
         getDocs(collection(db, "users")),
         getDocs(collection(db, "tasks")),
       ]);
@@ -311,7 +312,7 @@ export default function AdminPage() {
       const usersById = new Map(usersSnap.docs.map((d) => [d.id, d.data() as Record<string, unknown>]));
       const tasksById = new Map(tasksSnap.docs.map((d) => [d.id, d.data() as Record<string, unknown>]));
 
-      const fetched: ManualTaskCompletion[] = pendingSnap.docs
+      const fetched: ManualTaskCompletion[] = allCompletionsSnap.docs
         .filter((d) => {
           const raw = d.data() as Record<string, unknown>;
           const taskData = tasksById.get(String(raw.taskId || ""));
@@ -321,6 +322,11 @@ export default function AdminPage() {
           const raw = d.data() as Record<string, unknown>;
           const userData = usersById.get(String(raw.userId || ""));
           const taskData = tasksById.get(String(raw.taskId || ""));
+          const shareFromTask = typeof taskData?.manualUserSharePercent === "number"
+            ? (taskData.manualUserSharePercent as number)
+            : typeof raw.manualUserSharePercent === "number"
+              ? (raw.manualUserSharePercent as number)
+              : 100;
           return {
             id: d.id,
             taskId: String(raw.taskId || ""),
@@ -330,6 +336,7 @@ export default function AdminPage() {
             userName: String(raw.userName || userData?.name || "Unknown"),
             userEmail: String(raw.userEmail || userData?.email || ""),
             reward: Number(raw.reward || 0),
+            manualUserSharePercent: shareFromTask,
             status: (raw.status as ManualTaskCompletion["status"]) || "pending",
             submittedAt: (raw.completedAt as Timestamp)?.toDate() || new Date(),
           };
@@ -777,7 +784,7 @@ export default function AdminPage() {
       ]);
       const tasksById = new Map(tasksSnap.docs.map((d) => [d.id, d.data() as Record<string, unknown>]));
 
-      let manualTasksApprovedTotal = 0;
+      let manualTasksSiteProfit = 0;
       let platformTasksRevenue = 0;
       completionsSnap.docs.forEach((d) => {
         if (d.data().status !== "approved") return;
@@ -787,7 +794,16 @@ export default function AdminPage() {
         const isManual = isManualCompletion(raw, taskData);
 
         if (isManual) {
-          manualTasksApprovedTotal += Number(raw.reward || 0);
+          const reward = Number(raw.reward || 0);
+          const userSharePct =
+            typeof taskData?.manualUserSharePercent === "number"
+              ? (taskData.manualUserSharePercent as number)
+              : typeof raw.manualUserSharePercent === "number"
+                ? (raw.manualUserSharePercent as number)
+                : 100;
+          if (userSharePct < 100) {
+            manualTasksSiteProfit += reward * (1 - userSharePct / 100);
+          }
           return;
         }
 
@@ -805,9 +821,9 @@ export default function AdminPage() {
         totalWithdrawalsCount: wSnap.size,
         pendingWithdrawalsAmount,
         approvedWithdrawalsAmount,
-        manualTasksApprovedTotal,
+        manualTasksApprovedTotal: manualTasksSiteProfit,
         platformTasksRevenue,
-        totalRevenue: manualTasksApprovedTotal + platformTasksRevenue,
+        totalRevenue: manualTasksSiteProfit + platformTasksRevenue,
       });
     } finally {
       setLoadingAnalytics(false);
@@ -1061,6 +1077,30 @@ export default function AdminPage() {
     }
   }
 
+  async function handleResetTestData() {
+    setResetting(true);
+    try {
+      const [completionsSnap, manualTasksSnap, usersSnap] = await Promise.all([
+        getDocs(query(collection(db, "taskCompletions"), where("taskType", "==", "manual"))),
+        getDocs(query(collection(db, "tasks"), where("taskType", "==", "manual"))),
+        getDocs(collection(db, "users")),
+      ]);
+      await Promise.all([
+        ...completionsSnap.docs.map((d) => deleteDoc(doc(db, "taskCompletions", d.id))),
+        ...manualTasksSnap.docs.map((d) => deleteDoc(doc(db, "tasks", d.id))),
+        ...usersSnap.docs.map((d) => updateDoc(doc(db, "users", d.id), { balance: 0, pendingBalance: 0 })),
+      ]);
+      await fetchTasks();
+      await fetchManualCompletions();
+      setResetConfirmOpen(false);
+      toast({ title: "✅ Reset complete", description: `Deleted ${completionsSnap.size} completions, ${manualTasksSnap.size} tasks. All user balances zeroed.` });
+    } catch (e) {
+      toast({ title: "Reset failed", description: e instanceof Error ? e.message : "Unknown error", variant: "destructive" });
+    } finally {
+      setResetting(false);
+    }
+  }
+
   async function fetchAdminAlerts() {
     try {
       const snap = await getDocs(collection(db, "adminAlerts"));
@@ -1268,7 +1308,6 @@ export default function AdminPage() {
     { id: "withdrawals", label: `Withdrawals (${pendingWithdrawals.length})`, alertCount: adminAlerts.length },
     { id: "reconciliation", label: "Reconciliation" },
     { id: "tasks", label: "Tasks" },
-    { id: "manualReviews", label: `Manual Task Reviews (${manualCompletions.length})` },
     { id: "platforms", label: "Platforms" },
     { id: "import", label: "Import Tasks" },
     { id: "postbacks", label: `Postbacks (${postbacks.length})` },
@@ -1351,7 +1390,7 @@ export default function AdminPage() {
             setTab(t.id);
             if (t.id === "postbacks") fetchPostbacks();
             if (t.id === "analytics") fetchAnalytics();
-            if (t.id === "manualReviews") fetchManualCompletions();
+            if (t.id === "tasks") fetchManualCompletions();
             if (t.id === "reconciliation") handleFetchGlobalRecon();
             if (t.id === "users") fetchAllUsers();
           }}
@@ -2226,8 +2265,7 @@ export default function AdminPage() {
                             <Badge className={cn("text-xs shrink-0 border", t.status === "published" ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30" : "bg-slate-500/20 text-slate-300 border-slate-500/30")}>
                               {t.status || "published"}
                             </Badge>
-                            <Badge className={cn("text-xs shrink-0 border", ns.cls)}>{ns.label}</Badge>
-                          </div>
+                            </div>
                           <p className="text-xs text-white/40">
                             {t.platform} • Task value: {formatCurrency(t.reward)} → User: <span className="text-emerald-400">{formatCurrency(
                               (t.taskType || "platform") === "manual"
@@ -2263,102 +2301,143 @@ export default function AdminPage() {
                             <ThumbsUp className="w-3 h-3 mr-1" />Approve
                           </Button>
                         )}
-                        {t.networkStatus !== "rejected" && (
-                          <Button size="sm" onClick={() => handleSetNetworkStatus(t.id, "rejected")}
-                            className="bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 rounded-lg text-xs h-8" variant="outline">
-                            <ThumbsDown className="w-3 h-3 mr-1" />{t.networkStatus === "approved" ? "Revoke" : "Reject"}
-                          </Button>
-                        )}
                       </div>
                     </div>
                   );
                 })}</div>
             }
           </div>
+
+          {/* ── SECTION 2: MANUAL TASK REVIEWS ── */}
+          <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
+            <div className="flex items-center justify-between mb-4 gap-3">
+              <h2 className="font-semibold text-white flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-amber-400" />
+                Manual Task Reviews ({manualCompletions.length})
+              </h2>
+              <Button size="sm" variant="outline" onClick={fetchManualCompletions} disabled={loadingManualCompletions}
+                className="border-white/20 text-white/60 hover:text-white h-8">
+                <RefreshCw className={cn("w-3.5 h-3.5", loadingManualCompletions && "animate-spin")} />
+              </Button>
+            </div>
+            {loadingManualCompletions ? (
+              <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin text-emerald-400" /></div>
+            ) : manualCompletions.length === 0 ? (
+              <p className="text-white/40 text-center py-8 text-sm">No manual task submissions yet.</p>
+            ) : (
+              <div className="space-y-3">
+                {manualCompletions.map((c) => (
+                  <div key={c.id} className={cn(
+                    "bg-white/5 border rounded-xl p-4",
+                    c.status === "approved" ? "border-emerald-500/25" :
+                    c.status === "rejected" ? "border-red-500/20 opacity-80" :
+                    "border-white/10"
+                  )}>
+                    <div className="flex items-start justify-between gap-3 mb-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap mb-1">
+                          <span className="text-sm font-medium text-white">{c.userName}</span>
+                          <span className="text-xs text-white/40">{c.userEmail}</span>
+                          <Badge className={cn("text-xs border",
+                            c.status === "approved" ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30" :
+                            c.status === "rejected" ? "bg-red-500/20 text-red-300 border-red-500/30" :
+                            "bg-amber-500/20 text-amber-300 border-amber-500/30"
+                          )}>{c.status}</Badge>
+                        </div>
+                        <p className="text-sm text-white/80">{c.taskTitle}</p>
+                        {c.taskDescription && <p className="text-xs text-white/40 mt-0.5 line-clamp-2">{c.taskDescription}</p>}
+                        <div className="flex items-center gap-3 mt-1 text-xs text-white/40">
+                          <span className="text-emerald-400 font-medium">{formatCurrency(c.reward)}</span>
+                          {c.manualUserSharePercent < 100 && (
+                            <span>User gets {c.manualUserSharePercent}% = {formatCurrency(c.reward * c.manualUserSharePercent / 100)}</span>
+                          )}
+                          <span>{formatDate(c.submittedAt)}</span>
+                        </div>
+                      </div>
+                    </div>
+                    {c.status === "pending" && (
+                      <div className="flex gap-2 pt-2 border-t border-white/5">
+                        <Button size="sm"
+                          onClick={() => handleManualCompletionDecision(c.id, "approved")}
+                          disabled={reviewingCompletionId === c.id}
+                          className="flex-1 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 rounded-lg text-xs h-8"
+                          variant="outline">
+                          {reviewingCompletionId === c.id ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <ThumbsUp className="w-3 h-3 mr-1" />}
+                          Approve
+                        </Button>
+                        <Button size="sm"
+                          onClick={() => handleManualCompletionDecision(c.id, "rejected")}
+                          disabled={reviewingCompletionId === c.id}
+                          className="bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 rounded-lg text-xs h-8"
+                          variant="outline">
+                          {reviewingCompletionId === c.id ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <ThumbsDown className="w-3 h-3 mr-1" />}
+                          Reject
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* ── SECTION 3: FINANCIAL DASHBOARD ── */}
+          {(() => {
+            const approvedManual = manualCompletions.filter(c => c.status === "approved");
+            const blockA = approvedManual.filter(c => c.manualUserSharePercent >= 100);
+            const blockB = approvedManual.filter(c => c.manualUserSharePercent < 100);
+            const blockATotalToPayUsers = blockA.reduce((s, c) => s + c.reward, 0);
+            const blockBTotalToPayUsers = blockB.reduce((s, c) => s + c.reward * c.manualUserSharePercent / 100, 0);
+            const blockBSiteProfit = blockB.reduce((s, c) => s + c.reward * (1 - c.manualUserSharePercent / 100), 0);
+            return (
+              <div className="bg-white/5 border border-white/10 rounded-2xl p-5 space-y-4">
+                <h2 className="font-semibold text-white flex items-center gap-2">
+                  <DollarSign className="w-4 h-4 text-emerald-400" />
+                  Financial Dashboard — Manual Tasks
+                </h2>
+
+                {/* Block A: 100% user share */}
+                <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-xl p-4">
+                  <p className="text-xs text-emerald-300/70 uppercase tracking-wider font-medium mb-3">
+                    Block A — External Payment Tasks (100% User Share)
+                  </p>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs text-white/50">{blockA.length} approved completion(s)</p>
+                      <p className="text-xs text-white/30 mt-0.5">You pay the user directly — no platform cut</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs text-white/50 mb-0.5">Total Amount to Pay Users</p>
+                      <p className="text-2xl font-bold text-emerald-400">{formatCurrency(blockATotalToPayUsers)}</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Block B: Split tasks (<100%) */}
+                <div className="bg-purple-500/5 border border-purple-500/20 rounded-xl p-4">
+                  <p className="text-xs text-purple-300/70 uppercase tracking-wider font-medium mb-3">
+                    Block B — Split Tasks (Custom % per task)
+                  </p>
+                  <p className="text-xs text-white/30 mb-3">{blockB.length} approved completion(s) with revenue sharing</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-black/20 rounded-xl p-3 text-center">
+                      <p className="text-xs text-white/50 mb-1">Total to Pay Users</p>
+                      <p className="text-xl font-bold text-emerald-400">{formatCurrency(blockBTotalToPayUsers)}</p>
+                      <p className="text-xs text-white/30 mt-0.5">user share portions</p>
+                    </div>
+                    <div className="bg-black/20 rounded-xl p-3 text-center">
+                      <p className="text-xs text-white/50 mb-1">Site Profit</p>
+                      <p className="text-xl font-bold text-amber-400">{formatCurrency(blockBSiteProfit)}</p>
+                      <p className="text-xs text-white/30 mt-0.5">platform's cut</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
         </div>
       )}
 
-      {/* === MANUAL TASK REVIEWS === */}
-      {tab === "manualReviews" && (
-        <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
-          <div className="flex items-center justify-between mb-4 gap-3">
-            <h2 className="font-semibold text-white">Manual Task Reviews ({manualCompletions.length})</h2>
-            <Button size="sm" variant="outline" onClick={fetchManualCompletions} disabled={loadingManualCompletions}
-              className="border-white/20 text-white/60 hover:text-white h-8">
-              <RefreshCw className={cn("w-3.5 h-3.5", loadingManualCompletions && "animate-spin")} />
-            </Button>
-          </div>
-          {loadingManualCompletions ? (
-            <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin text-emerald-400" /></div>
-          ) : manualCompletions.length === 0 ? (
-            <p className="text-white/40 text-center py-8 text-sm">No pending manual task reviews.</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-white/50 border-b border-white/10">
-                    <th className="py-2 pr-3 font-medium">User</th>
-                    <th className="py-2 pr-3 font-medium">Task</th>
-                    <th className="py-2 pr-3 font-medium">Reward</th>
-                    <th className="py-2 pr-3 font-medium">Submitted</th>
-                    <th className="py-2 pr-3 font-medium">Status</th>
-                    <th className="py-2 font-medium text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {manualCompletions.map((c) => (
-                    <tr key={c.id} className="border-b border-white/5 last:border-0">
-                      <td className="py-3 pr-3 align-top">
-                        <p className="text-white font-medium">{c.userName}</p>
-                        <p className="text-xs text-white/40">{c.userEmail}</p>
-                      </td>
-                      <td className="py-3 pr-3 align-top min-w-[180px]">
-                        <p className="text-white">{c.taskTitle}</p>
-                        {c.taskDescription && (
-                          <p className="text-xs text-white/40 mt-0.5 line-clamp-2">{c.taskDescription}</p>
-                        )}
-                      </td>
-                      <td className="py-3 pr-3 align-top text-emerald-400 font-medium whitespace-nowrap">
-                        {formatCurrency(c.reward)}
-                      </td>
-                      <td className="py-3 pr-3 align-top text-white/60 whitespace-nowrap text-xs">
-                        {formatDate(c.submittedAt)}
-                      </td>
-                      <td className="py-3 pr-3 align-top">
-                        <Badge className="text-xs border bg-amber-500/20 text-amber-300 border-amber-500/30">pending</Badge>
-                      </td>
-                      <td className="py-3 align-top">
-                        <div className="flex justify-end gap-2">
-                          <Button
-                            size="sm"
-                            onClick={() => handleManualCompletionDecision(c.id, "approved")}
-                            disabled={reviewingCompletionId === c.id}
-                            className="bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30"
-                            variant="outline"
-                          >
-                            {reviewingCompletionId === c.id ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <ThumbsUp className="w-3 h-3 mr-1" />}
-                            Approve
-                          </Button>
-                          <Button
-                            size="sm"
-                            onClick={() => handleManualCompletionDecision(c.id, "rejected")}
-                            disabled={reviewingCompletionId === c.id}
-                            className="bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30"
-                            variant="outline"
-                          >
-                            {reviewingCompletionId === c.id ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <ThumbsDown className="w-3 h-3 mr-1" />}
-                            Reject
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
 
       {/* === PLATFORMS === */}
       {tab === "platforms" && (
@@ -2663,10 +2742,10 @@ export default function AdminPage() {
                 <div className="bg-purple-500/10 border border-purple-500/20 rounded-2xl p-5">
                   <div className="flex items-center gap-2 mb-2">
                     <DollarSign className="w-4 h-4 text-purple-400" />
-                    <span className="text-xs text-purple-300/70">Manual Tasks Approved Total</span>
+                    <span className="text-xs text-purple-300/70">Manual Tasks Site Profit</span>
                   </div>
                   <div className="text-3xl font-bold text-white">{formatCurrency(analytics.manualTasksApprovedTotal)}</div>
-                  <p className="text-xs text-white/40 mt-1">Full approved payout (no split applied)</p>
+                  <p className="text-xs text-white/40 mt-1">Platform cut from split tasks (Block B)</p>
                 </div>
                 <div className="bg-cyan-500/10 border border-cyan-500/20 rounded-2xl p-5">
                   <div className="flex items-center gap-2 mb-2">
@@ -3094,6 +3173,41 @@ export default function AdminPage() {
           </Button>
 
 
+
+          {/* ── DATA RESET ── */}
+          <div className="bg-red-500/5 border border-red-500/25 rounded-2xl p-6 space-y-4">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+              <div>
+                <h2 className="font-semibold text-red-400">Test Data Reset</h2>
+                <p className="text-xs text-white/40 mt-1">
+                  Permanently deletes ALL manual tasks, ALL manual task completions, and resets ALL user balances to zero. Use only for clean testing environments.
+                </p>
+              </div>
+            </div>
+            {resetConfirmOpen ? (
+              <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 space-y-3">
+                <p className="text-sm font-medium text-red-300">Are you absolutely sure? This cannot be undone.</p>
+                <div className="flex gap-2">
+                  <Button onClick={handleResetTestData} disabled={resetting}
+                    className="bg-red-500 hover:bg-red-400 text-white rounded-xl">
+                    {resetting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Trash2 className="w-4 h-4 mr-2" />}
+                    Yes, Reset Everything
+                  </Button>
+                  <Button variant="outline" onClick={() => setResetConfirmOpen(false)} disabled={resetting}
+                    className="border-white/20 text-white/60 hover:text-white rounded-xl">
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <Button onClick={() => setResetConfirmOpen(true)}
+                variant="outline"
+                className="border-red-500/40 text-red-400 hover:bg-red-500/10 rounded-xl">
+                <Trash2 className="w-4 h-4 mr-2" />Reset All Test Data
+              </Button>
+            )}
+          </div>
 
           {/* Email Ban System */}
           <div className="bg-orange-500/5 border border-orange-500/20 rounded-2xl p-6 space-y-5">
