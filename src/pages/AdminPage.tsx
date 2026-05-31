@@ -797,15 +797,11 @@ export default function AdminPage() {
 
         if (isManual) {
           const reward = Number(raw.reward || 0);
-          const userSharePct =
-            typeof taskData?.manualUserSharePercent === "number"
-              ? (taskData.manualUserSharePercent as number)
-              : typeof raw.manualUserSharePercent === "number"
-                ? (raw.manualUserSharePercent as number)
-                : 100;
-          if (userSharePct < 100) {
-            manualTasksSiteProfit += reward * (1 - userSharePct / 100);
-          }
+          const adminReward = typeof raw.adminReward === "number"
+            ? (raw.adminReward as number)
+            : reward;
+          // site profit = full task value minus the user's already-split earned amount
+          manualTasksSiteProfit += Math.max(0, adminReward - reward);
           return;
         }
 
