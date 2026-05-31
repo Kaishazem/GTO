@@ -1,0 +1,63 @@
+CRITICAL: Implement Email Ban System that WORKS 100%. No partial implementation.
+
+**STEP 1: Create Firestore Collection & Rules**
+1. Create collection `banned_emails` with documents containing:
+   - email (string)
+   - reason (string) 
+   - bannedAt (timestamp)
+   - bannedBy (string - admin UID)
+
+2. IMMEDIATELY update Firestore Rules to allow:
+   - Admins can write to banned_emails
+   - ANYONE can READ banned_emails (this is crucial for the check to work)
+   
+   Rules example:
+   match /banned_emails/{doc} {
+     allow read: if true;
+     allow write: if request.auth != null && 
+       get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+   }
+
+**STEP 2: Admin Panel UI (Settings Page)**
+- Add section "Email Ban System" with:
+  • Email input field
+  • Reason input field  
+  • "Ban User" button (orange/red)
+- On click: Save to `banned_emails` collection with email as document ID
+
+**STEP 3: Real-Time Protection (3 Places)**
+
+**A) AuthContext.tsx (for logged-in users):**
+- Add useEffect that checks: if currentUser.email exists in `banned_emails`
+- If found: 
+  • Show red banner: "Account Banned: [reason]"
+  • Call signOut() immediately
+  • Redirect to /login
+
+**B) LoginPage.tsx (prevent login):**
+- Add debounced check when email is typed
+- Query `banned_emails` where email == input
+- If found:
+  • Show red banner with exact reason
+  • Disable "Sign In" button (gray, not clickable)
+  • Block form submission
+
+**C) RegisterPage.tsx (prevent new account):**
+- Same check as LoginPage
+- If email is banned, block registration with red banner
+
+**STEP 4: Testing Requirements**
+Before marking complete, TEST:
+1. ✓ Admin can ban an email successfully
+2. ✓ Banned email appears in Firestore `banned_emails` collection
+3. ✓ Logged-in user gets kicked out immediately when banned
+4. ✓ Banned user cannot login (button disabled)
+5. ✓ Banned user cannot register (blocked)
+6. ✓ Red banner shows exact reason in all cases
+
+**CRITICAL:**
+- Do NOT skip Firestore Rules update
+- Do NOT skip any of the 3 protection layers
+- Test each step before saying "done"
+
+Apply this now and confirm each step works.

@@ -1,0 +1,67 @@
+URGENT: The previous fixes did NOT work. Here are the EXACT problems I can SEE:
+
+**PROBLEM 1: Arabic Text in Withdrawals Section (I can see it in screenshots)**
+- In Admin Panel → Withdrawals tab → "Paid This Month" card:
+  * Date shows: "26 مايو" (Arabic month name) - MUST be "May 26"
+  * Calendar popup: Entire calendar is in Arabic (days, months, buttons)
+  
+- Below the cards, filter buttons show Arabic text:
+  * Buttons display: "فلس/رهش/موي" (Arabic text)
+  * MUST be: "Filter/Reset/Apply" (English)
+
+**PROBLEM 2: Arabic-Indic Numerals (٠١٢٣٤٥ instead of 012345)**
+- In Admin → Tasks → Add New Task form:
+  * Reward field shows: ٠.٠٠٥٠٠ (Arabic-Indic numerals)
+  * When I delete it, I CANNOT type 0.5 or 1.25
+  * Only accepts whole numbers like 1, 2, 3
+  
+- In Withdrawals section:
+  * Dates and numbers display in Arabic format
+  * Calendar shows Arabic numerals
+
+**ROOT CAUSES TO FIX:**
+
+1. **HTML Lang Attribute:**
+   - Open: public/index.html or index.html
+   - Change: <html lang="ar"> → <html lang="en">
+   - Add: dir="ltr"
+
+2. **React App Locale:**
+   - Find main App.tsx or index.tsx
+   - Add: <html lang="en" dir="ltr">
+   - Set default locale to 'en-US' everywhere
+
+3. **Date Picker Locale:**
+   - Find ALL DatePicker components (search: DatePicker, DateRangePicker)
+   - Add props: locale="en-US" lang="en"
+   - If using libraries like react-datepicker, import English locale
+
+4. **Number Input Fields:**
+   - Find ALL input type="number" for rewards/amounts
+   - Ensure: step="0.0001" (not step="1")
+   - Ensure: inputMode="decimal" (not "numeric")
+   - Add: lang="en" to force Western numerals
+   - Remove any Arabic numeral formatters
+
+5. **Button Labels:**
+   - Search for Arabic text: "فلس" "رهش" "موي" "مايو"
+   - Replace with English equivalents
+
+**FILES TO CHECK:**
+- src/pages/AdminPage.tsx
+- src/pages/Withdrawals.tsx  
+- src/components/DatePicker.tsx
+- src/components/TaskForm.tsx
+- public/index.html
+- src/App.tsx
+
+**TEST AFTER FIXING:**
+1. Reload page
+2. Go to Admin → Withdrawals
+3. Check: Date shows "May 26" not "26 مايو"
+4. Check: Buttons say "Filter/Reset/Apply" not Arabic
+5. Go to Admin → Tasks → Add Task
+6. Try typing: 0.5 in reward field - MUST work
+7. Numbers must display as: 0.12345 NOT ٠.١٢٣٤٥
+
+DO NOT say "already fixed" - I can see the problems in my screenshots. Apply actual changes and test thoroughly.

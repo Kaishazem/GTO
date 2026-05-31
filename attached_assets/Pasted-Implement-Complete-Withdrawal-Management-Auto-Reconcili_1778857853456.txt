@@ -1,0 +1,68 @@
+Implement Complete Withdrawal Management & Auto-Reconciliation System:
+
+=== PHASE 1: WITHDRAWALS ADMIN TAB ===
+
+1. Create "Withdrawals" tab in Admin Panel with:
+   - Table showing: User Email, Requested Amount, Net Payout (after 5%+Gas), Wallet Address, Status, Date
+   - [Copy] button for wallet address
+   - [Approve] button: marks as 'paid', deducts from balance
+   - [Reject] button: marks as 'rejected', refunds balance with optional reason field
+   - Summary cards: Total Pending Amount, Total Paid This Month, Pending Count
+
+=== PHASE 2: AUTO-RECONCILIATION SYSTEM ===
+
+2. Implement automatic reconciliation that runs when platform sends payout report:
+   
+   a) **Auto-Compare Data:**
+      - Compare tasks approved in platform's report vs tasks marked approved in our system
+      - Compare total amount received from platform vs total amount owed to users
+      - Match by: user email, task ID, completion timestamp, amount
+   
+   b) **Discrepancy Detection:**
+      - Flag if: User completed task but platform rejected it
+      - Flag if: Amount differences (platform paid less/more than expected)
+      - Flag if: Task completion missing in platform report
+      - Show detailed report: which user, which task ID, rejection reason, amount difference
+   
+   c) **Reconciliation Dashboard:**
+      - Add "Reconciliation" section in Admin Panel showing:
+        * ✅ Matched tasks (count and total amount)
+        * ❌ Rejected tasks (with user email, task ID, platform rejection reason)
+        * ⏳ Pending verification (tasks awaiting platform confirmation)
+        * Warning if: Platform funds < Total withdrawal requests
+   
+   d) **Safety Block:**
+      - PREVENT admin from approving withdrawals until reconciliation shows 100% match
+      - Show alert: "Reconciliation incomplete - X tasks mismatched. Review before approving."
+      - Only allow approval when: Platform received money = User withdrawal requests
+
+=== PHASE 3: WORKFLOW AUTOMATION ===
+
+3. Implement complete withdrawal workflow:
+   
+   Step 1: User completes task → Status: "Pending" (waiting for platform)
+   Step 2: Platform sends Postback → Status: "Approved" (auto-updated)
+   Step 3: User requests withdrawal → Status: "Withdrawal Requested"
+   Step 4: Platform sends payout report → System auto-reconciles
+   Step 5: Reconciliation verified → Status: "Ready to Pay"
+   Step 6: Admin clicks [Approve] → Status: "Paid" (user receives money)
+
+=== PHASE 4: FRAUD DETECTION (if credits remain) ===
+
+4. Add fraud detection alerts:
+   - Red badge on Withdrawals tab showing count of flagged withdrawals
+   - Alert panel listing suspicious withdrawals (multiple accounts, VPN detected, rapid withdrawals)
+   - [Dismiss] / [Dismiss All] buttons to mark alerts as reviewed
+   - Auto-flag if: Same device fingerprint, same wallet address, unusual patterns
+
+=== TESTING REQUIREMENTS ===
+
+Test thoroughly:
+1. Admin can view all pending withdrawals
+2. System auto-reconciles when platform report arrives
+3. Discrepancies are flagged with detailed reasons
+4. Admin CANNOT approve until 100% reconciliation match
+5. Users only see their withdrawal status, not reconciliation details
+6. Fraud alerts appear for suspicious activity
+
+Ensure users see only net balances & clear withdrawal fees, while admin gets full financial breakdown and reconciliation control.
