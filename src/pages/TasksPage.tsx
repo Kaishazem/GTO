@@ -177,7 +177,7 @@ export default function TasksPage() {
                             "bg-red-500/20 text-red-300 border-red-500/30": completion.status === "rejected",
                           })}>
                             {completion.status === "pending" ? "⏳ Pending" : completion.status === "approved" ? "✅ Approved" : "❌ Rejected"}
-                            {completion.verifiedBy && ` • ${completion.verifiedBy}`}
+                            {completion.verifiedBy && ` • Admin`}
                           </Badge>
                         )}
                       </div>
@@ -243,9 +243,9 @@ export default function TasksPage() {
         </>
       )}
 
-      {/* Task History / My Activity */}
+      {/* Task History */}
       <div className="bg-white/5 border border-white/10 rounded-2xl p-6">
-        <h2 className="text-xl font-bold text-white mb-1">My Activity</h2>
+        <h2 className="text-xl font-bold text-white mb-1">Task History</h2>
         <p className="text-sm text-white/50 mb-4">Your task completion history</p>
 
         <div className="flex gap-2 flex-wrap mb-4">

@@ -34,7 +34,6 @@ export default function DashboardPage() {
     })();
   }, []);
 
-  const recentCompletions = completions.slice(0, 5);
   const simpleTasks = tasks.filter((t) => t.type === "simple");
   const premiumTasks = tasks.filter((t) => t.type === "premium");
   const totalCompleted = completions.length;
@@ -182,36 +181,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Recent activity */}
-      {recentCompletions.length > 0 && (
-        <div className="bg-white/5 border border-white/10 rounded-2xl p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-semibold text-white">Recent Activity</h2>
-            <Link href="/tasks">
-              <span className="text-xs text-emerald-400 hover:text-emerald-300 cursor-pointer flex items-center gap-1">
-                View tasks <ChevronRight className="w-3 h-3" />
-              </span>
-            </Link>
-          </div>
-          <div className="space-y-3">
-            {recentCompletions.map((c) => (
-              <div key={c.id} className="flex items-center justify-between py-2 border-b border-white/5 last:border-0">
-                <div className="flex items-center gap-3">
-                  <div className={`w-2 h-2 rounded-full shrink-0 ${c.status === "approved" ? "bg-emerald-400" : c.status === "rejected" ? "bg-red-400" : "bg-amber-400"}`} />
-                  <div>
-                    <span className="text-sm text-white/80 capitalize">{c.status}</span>
-                    {c.verifiedBy && <span className="text-xs text-emerald-400/60 ml-2">via {c.verifiedBy}</span>}
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  {c.status === "approved" && <CheckCircle className="w-3 h-3 text-emerald-400" />}
-                  <span className="text-sm font-medium text-emerald-400">+{formatCurrency(c.reward)}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
