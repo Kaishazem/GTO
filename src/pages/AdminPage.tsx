@@ -92,6 +92,7 @@ type ManualTaskCompletion = {
   userName: string;
   userEmail: string;
   reward: number;
+  adminReward: number;
   manualUserSharePercent: number;
   status: "pending" | "approved" | "rejected";
   submittedAt: Date;
@@ -336,6 +337,7 @@ export default function AdminPage() {
             userName: String(raw.userName || userData?.name || "Unknown"),
             userEmail: String(raw.userEmail || userData?.email || ""),
             reward: Number(raw.reward || 0),
+            adminReward: Number(raw.adminReward ?? raw.reward ?? 0),
             manualUserSharePercent: shareFromTask,
             status: (raw.status as ManualTaskCompletion["status"]) || "pending",
             submittedAt: (raw.completedAt as Timestamp)?.toDate() || new Date(),
@@ -986,38 +988,68 @@ export default function AdminPage() {
       toast({ title: "Error", description: "Completion not found in list.", variant: "destructive" });
       return;
     }
+    if (item.status === decision) return;
 
     setReviewingCompletionId(completionId);
     try {
-      const action = decision === "approved" ? "approve" : "reject";
-      const result = await settleWalletCompletion(
-        item.userId,
-        completionId,
-        item.reward,
-        action,
-        {
-          source: "manual_admin_review",
-          actorId: profile?.uid,
-          actorName: profile?.name || "admin",
-          reason: decision === "rejected" ? "Rejected during manual task review" : undefined,
-        }
-      );
-
-      if (!result.success) {
-        throw new Error(result.message || "Settlement failed");
-      }
-      if (!result.applied) {
-        toast({ title: "Skipped", description: result.message || "This completion was already processed." });
-      } else {
+      if (item.status === "pending") {
+        const action = decision === "approved" ? "approve" : "reject";
+        const result = await settleWalletCompletion(
+          item.userId,
+          completionId,
+          item.reward,
+          action,
+          {
+            source: "manual_admin_review",
+            actorId: profile?.uid,
+            actorName: profile?.name || "admin",
+            reason: decision === "rejected" ? "Rejected during manual task review" : undefined,
+          }
+        );
+        if (!result.success) throw new Error(result.message || "Settlement failed");
         toast({
-          title: decision === "approved" ? "✅ Completion approved" : "Completion rejected",
+          title: decision === "approved" ? "✅ Approved" : "Rejected",
           description: decision === "approved"
-            ? "Wallet balances updated and transaction recorded."
+            ? "Wallet credited and transaction recorded."
             : "Pending reward removed from user wallet.",
+        });
+      } else {
+        // Re-decision: update status and adjust wallet balance
+        const userRef = doc(db, "users", item.userId);
+        const completionRef = doc(db, "taskCompletions", completionId);
+        const userSnap = await getDoc(userRef);
+        if (!userSnap.exists()) throw new Error("User not found");
+        const userData = userSnap.data() as { balance?: number; pendingBalance?: number };
+        const currentBalance = Number(userData.balance || 0);
+
+        const batch: Promise<void>[] = [];
+
+        if (item.status === "approved" && decision === "rejected") {
+          // Reverse: deduct credited reward from balance
+          batch.push(
+            updateDoc(userRef, { balance: Math.max(0, currentBalance - item.reward), walletUpdatedAt: serverTimestamp() }),
+            updateDoc(completionRef, { status: "rejected", overriddenAt: serverTimestamp(), overriddenBy: profile?.name || "admin" })
+          );
+        } else if (item.status === "rejected" && decision === "approved") {
+          // Re-approve: credit the reward back to balance
+          batch.push(
+            updateDoc(userRef, { balance: currentBalance + item.reward, walletUpdatedAt: serverTimestamp() }),
+            updateDoc(completionRef, { status: "approved", overriddenAt: serverTimestamp(), overriddenBy: profile?.name || "admin" })
+          );
+        }
+
+        await Promise.all(batch);
+        toast({
+          title: decision === "approved" ? "✅ Re-approved" : "Re-rejected",
+          description: decision === "approved"
+            ? "Status overridden → approved. Wallet re-credited."
+            : "Status overridden → rejected. Balance adjusted.",
         });
       }
 
-      await fetchManualCompletions();
+      setManualCompletions(prev =>
+        prev.map(c => c.id === completionId ? { ...c, status: decision } : c)
+      );
       if (analytics) await fetchAnalytics();
     } catch (e) {
       toast({ title: "Error", description: e instanceof Error ? e.message : "Failed", variant: "destructive" });
@@ -2346,35 +2378,52 @@ export default function AdminPage() {
                         </div>
                         <p className="text-sm text-white/80">{c.taskTitle}</p>
                         {c.taskDescription && <p className="text-xs text-white/40 mt-0.5 line-clamp-2">{c.taskDescription}</p>}
-                        <div className="flex items-center gap-3 mt-1 text-xs text-white/40">
-                          <span className="text-emerald-400 font-medium">{formatCurrency(c.reward)}</span>
+                        <div className="flex items-center gap-3 mt-1 text-xs text-white/40 flex-wrap">
+                          <span className="text-white/50">Task total: <span className="text-white/70 font-medium">{formatCurrency(c.adminReward)}</span></span>
+                          <span className="text-emerald-400 font-medium">
+                            User: {c.manualUserSharePercent}% = {formatCurrency(c.reward)}
+                          </span>
                           {c.manualUserSharePercent < 100 && (
-                            <span>User gets {c.manualUserSharePercent}% = {formatCurrency(c.reward * c.manualUserSharePercent / 100)}</span>
+                            <span className="text-amber-400/80">
+                              Site: {formatCurrency(c.adminReward - c.reward)}
+                            </span>
                           )}
                           <span>{formatDate(c.submittedAt)}</span>
                         </div>
                       </div>
                     </div>
-                    {c.status === "pending" && (
-                      <div className="flex gap-2 pt-2 border-t border-white/5">
-                        <Button size="sm"
-                          onClick={() => handleManualCompletionDecision(c.id, "approved")}
-                          disabled={reviewingCompletionId === c.id}
-                          className="flex-1 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 rounded-lg text-xs h-8"
-                          variant="outline">
-                          {reviewingCompletionId === c.id ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <ThumbsUp className="w-3 h-3 mr-1" />}
-                          Approve
-                        </Button>
-                        <Button size="sm"
-                          onClick={() => handleManualCompletionDecision(c.id, "rejected")}
-                          disabled={reviewingCompletionId === c.id}
-                          className="bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 rounded-lg text-xs h-8"
-                          variant="outline">
-                          {reviewingCompletionId === c.id ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <ThumbsDown className="w-3 h-3 mr-1" />}
-                          Reject
-                        </Button>
-                      </div>
-                    )}
+                    <div className="flex gap-2 pt-2 border-t border-white/5">
+                      <Button size="sm"
+                        onClick={() => handleManualCompletionDecision(c.id, "approved")}
+                        disabled={reviewingCompletionId === c.id || c.status === "approved"}
+                        className={cn(
+                          "flex-1 rounded-lg text-xs h-8 border",
+                          c.status === "approved"
+                            ? "bg-white/5 text-white/30 border-white/10 cursor-default"
+                            : "bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border-emerald-500/30"
+                        )}
+                        variant="outline">
+                        {reviewingCompletionId === c.id && c.status !== "approved"
+                          ? <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                          : <ThumbsUp className="w-3 h-3 mr-1" />}
+                        Approve
+                      </Button>
+                      <Button size="sm"
+                        onClick={() => handleManualCompletionDecision(c.id, "rejected")}
+                        disabled={reviewingCompletionId === c.id || c.status === "rejected"}
+                        className={cn(
+                          "rounded-lg text-xs h-8 border",
+                          c.status === "rejected"
+                            ? "bg-white/5 text-white/30 border-white/10 cursor-default"
+                            : "bg-red-500/10 hover:bg-red-500/20 text-red-400 border-red-500/30"
+                        )}
+                        variant="outline">
+                        {reviewingCompletionId === c.id && c.status !== "rejected"
+                          ? <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                          : <ThumbsDown className="w-3 h-3 mr-1" />}
+                        Reject
+                      </Button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -2386,9 +2435,10 @@ export default function AdminPage() {
             const approvedManual = manualCompletions.filter(c => c.status === "approved");
             const blockA = approvedManual.filter(c => c.manualUserSharePercent >= 100);
             const blockB = approvedManual.filter(c => c.manualUserSharePercent < 100);
+            // c.reward is already the user's earned share; c.adminReward is the full task value
             const blockATotalToPayUsers = blockA.reduce((s, c) => s + c.reward, 0);
-            const blockBTotalToPayUsers = blockB.reduce((s, c) => s + c.reward * c.manualUserSharePercent / 100, 0);
-            const blockBSiteProfit = blockB.reduce((s, c) => s + c.reward * (1 - c.manualUserSharePercent / 100), 0);
+            const blockBTotalToPayUsers = blockB.reduce((s, c) => s + c.reward, 0);
+            const blockBSiteProfit = blockB.reduce((s, c) => s + Math.max(0, c.adminReward - c.reward), 0);
             return (
               <div className="bg-white/5 border border-white/10 rounded-2xl p-5 space-y-4">
                 <h2 className="font-semibold text-white flex items-center gap-2">
