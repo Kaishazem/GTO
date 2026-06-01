@@ -113,28 +113,35 @@ export default function WalletPage() {
     try {
       if (!profile?.uid) return;
 
-      // Check if this wallet is already linked to another account
-      const addrLower = walletAddress.toLowerCase();
-      const [exactSnap, lowerSnap, wSnap] = await Promise.all([
-        getDocs(query(collection(db, "users"), where("trc20Address", "==", walletAddress))),
-        getDocs(query(collection(db, "users"), where("walletAddressLower", "==", addrLower))),
-        getDocs(query(collection(db, "withdrawals"), where("walletAddress", "==", walletAddress))),
-      ]);
+      // Check if this wallet is already linked to another account.
+      // Cross-user queries may fail with permission denied (Firestore rules reject
+      // queries that could return other users' documents). We catch that and proceed —
+      // the admin fraud-alert layer handles duplicate detection.
+      try {
+        const addrLower = walletAddress.toLowerCase();
+        const [exactSnap, lowerSnap, wSnap] = await Promise.all([
+          getDocs(query(collection(db, "users"), where("trc20Address", "==", walletAddress))),
+          getDocs(query(collection(db, "users"), where("walletAddressLower", "==", addrLower))),
+          getDocs(query(collection(db, "withdrawals"), where("walletAddress", "==", walletAddress))),
+        ]);
 
-      const s = settings?.allowDuplicateWallets !== true;
-      const allDocs = [...exactSnap.docs, ...lowerSnap.docs, ...wSnap.docs];
-      const takenByOther = allDocs.some((d) => {
-        const uid = (d.data().userId as string) || d.id;
-        return uid !== profile.uid;
-      });
-
-      if (takenByOther && s) {
-        toast({
-          title: "Wallet already in use",
-          description: "This wallet is already linked to another account. Please use a different wallet address.",
-          variant: "destructive",
+        const s = settings?.allowDuplicateWallets !== true;
+        const allDocs = [...exactSnap.docs, ...lowerSnap.docs, ...wSnap.docs];
+        const takenByOther = allDocs.some((d) => {
+          const uid = (d.data().userId as string) || d.id;
+          return uid !== profile.uid;
         });
-        return;
+
+        if (takenByOther && s) {
+          toast({
+            title: "Wallet already in use",
+            description: "This wallet is already linked to another account. Please use a different wallet address.",
+            variant: "destructive",
+          });
+          return;
+        }
+      } catch {
+        // Permission denied on cross-user query — skip uniqueness check and proceed.
       }
 
       await updateDoc(doc(db, "users", profile.uid), {

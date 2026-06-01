@@ -106,5 +106,12 @@ service cloud.firestore {
       allow update, delete: if isAdmin();
     }
 
+    // ── adminAlerts/{alertId} ──────────────────────────────────────────────
+    // Users can create alerts about themselves (fraud detection); admins manage all.
+    match /adminAlerts/{alertId} {
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read, update, delete: if isAdmin();
+    }
+
   }
 }
