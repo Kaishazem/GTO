@@ -27,6 +27,7 @@ export default function TasksPage() {
   const completedIds = new Set(completions.map((c) => c.taskId));
 
   const filtered = tasks.filter((t) => {
+    if (completedIds.has(t.id)) return false;
     if (tab === "simple") return t.type === "simple";
     if (tab === "premium") return t.type === "premium";
     return true;
@@ -50,10 +51,12 @@ export default function TasksPage() {
     }
   }
 
+  const availableTasks = tasks.filter((t) => !completedIds.has(t.id));
+
   const tabs: { id: MainTab; label: string; icon?: React.ReactNode; count?: number }[] = [
-    { id: "all", label: "All", count: tasks.length },
-    { id: "simple", label: "Simple", icon: <Zap className="w-3.5 h-3.5" />, count: tasks.filter((t) => t.type === "simple").length },
-    { id: "premium", label: "Premium", icon: <Star className="w-3.5 h-3.5" />, count: tasks.filter((t) => t.type === "premium").length },
+    { id: "all", label: "All", count: availableTasks.length },
+    { id: "simple", label: "Simple", icon: <Zap className="w-3.5 h-3.5" />, count: availableTasks.filter((t) => t.type === "simple").length },
+    { id: "premium", label: "Premium", icon: <Star className="w-3.5 h-3.5" />, count: availableTasks.filter((t) => t.type === "premium").length },
     { id: "history", label: "Task History", icon: <History className="w-3.5 h-3.5" />, count: completions.length },
   ];
 
