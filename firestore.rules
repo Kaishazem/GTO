@@ -98,5 +98,13 @@ service cloud.firestore {
       allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
     }
 
+    // ── withdrawals/{withdrawalId} ─────────────────────────────────────────
+    // Users can create and read their own withdrawal requests; admins manage all.
+    match /withdrawals/{withdrawalId} {
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read:   if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow update, delete: if isAdmin();
+    }
+
   }
 }
