@@ -1,0 +1,185 @@
+@Codebase
+
+Analyze the current withdrawal reconciliation logic.
+
+Current bug:
+
+Withdrawal approval is being blocked because reconciliation is considering rejected tasks, pending tasks, and/or manual tasks.
+
+This is incorrect.
+
+==================================================
+EXPECTED BUSINESS LOGIC
+
+The platform has two task types:
+
+1. manual
+2. platform
+
+==================================================
+WALLET LOGIC (KEEP CURRENT BEHAVIOR)
+
+Approved task:
+
+- remove reward from pending balance
+- add reward to available balance
+
+Rejected task:
+
+- remove reward from pending balance
+- do NOT add reward to available balance
+
+This behavior already exists and should remain unchanged.
+
+==================================================
+RECONCILIATION LOGIC
+
+Reconciliation must ONLY consider approved platform earnings.
+
+The following task statuses must be COMPLETELY IGNORED:
+
+- pending
+- rejected
+- cancelled
+- expired
+
+Only:
+
+status = "approved"
+
+should participate in reconciliation calculations.
+
+==================================================
+PENDING TASKS
+
+Pending tasks must NOT block withdrawals.
+
+Pending tasks are unresolved earnings and are already stored in pending balance.
+
+They are not withdrawable, but they must not reduce reconciliation percentage.
+
+==================================================
+REJECTED TASKS
+
+Rejected tasks must NOT block withdrawals.
+
+Rejected tasks have already been removed from pending balance and are not valid earnings.
+
+They must be completely ignored during reconciliation.
+
+==================================================
+MANUAL TASKS
+
+Manual task earnings are valid withdrawable earnings.
+
+When a manual task is approved:
+
+- reward moves to available balance
+- user can withdraw those earnings
+
+However:
+
+- manual tasks must NOT participate in platform reconciliation
+- manual tasks must NOT reduce reconciliation percentage
+- manual tasks must NOT block withdrawal approval
+- manual tasks do NOT require platform reports
+
+A user must be able to withdraw approved manual-task earnings even when no platform report exists.
+
+==================================================
+PLATFORM TASKS
+
+Platform tasks participate in reconciliation.
+
+Only APPROVED platform earnings should be compared against platform reports.
+
+==================================================
+CORRECT EXAMPLE
+
+User tasks:
+
+Task A:
+type = platform
+status = approved
+reward = $10
+
+Task B:
+type = platform
+status = pending
+reward = $20
+
+Task C:
+type = platform
+status = rejected
+reward = $30
+
+Task D:
+type = manual
+status = approved
+reward = $5
+
+Wallet:
+
+Available Balance = $15
+Pending Balance = $20
+
+Expected Result:
+
+- Task A participates in reconciliation
+- Task B ignored
+- Task C ignored
+- Task D ignored for reconciliation
+
+Withdrawal approval should be ALLOWED because available earnings are valid.
+
+==================================================
+INVESTIGATION
+
+Before applying changes:
+
+Show me:
+
+1. Current reconciliation formula.
+2. Which statuses are included.
+3. Whether manual tasks are included.
+4. Why rejected/pending tasks affect reconciliation.
+
+==================================================
+FIX
+
+Apply the minimum changes necessary.
+
+Do NOT:
+
+- redesign the system
+- rebuild reconciliation
+- modify routing
+- modify UI
+- modify authentication
+- modify wallet settlement logic
+
+Only fix reconciliation calculations.
+
+==================================================
+VALIDATION
+
+After the fix:
+
+Create test scenarios containing:
+
+- approved platform task
+- pending platform task
+- rejected platform task
+- approved manual task
+
+Verify:
+
+- rejected tasks do not affect reconciliation
+- pending tasks do not affect reconciliation
+- manual tasks do not affect platform reconciliation
+- approved manual earnings remain withdrawable
+- approved platform earnings reconcile correctly
+- withdrawal approval becomes available when valid earnings exist
+- duplicate approvals remain impossible
+
+Provide a summary of exactly what was changed.

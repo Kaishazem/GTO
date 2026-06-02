@@ -6,6 +6,7 @@ export interface CompletionRecord {
   taskId: string;
   taskTitle: string;
   taskPlatform: string;
+  taskType: "manual" | "platform";
   reward: number;
   status: "pending" | "approved" | "rejected";
   verifiedBy?: string;
@@ -32,6 +33,7 @@ export async function fetchUserReconciliation(userId: string): Promise<UserRecon
     taskId: d.data().taskId as string,
     taskTitle: (d.data().taskTitle as string) || "Unknown Task",
     taskPlatform: (d.data().taskPlatform as string) || "",
+    taskType: (d.data().taskType as "manual" | "platform") || "platform",
     reward: (d.data().reward as number) || 0,
     status: (d.data().status as CompletionRecord["status"]) || "pending",
     verifiedBy: d.data().verifiedBy as string | undefined,
@@ -42,15 +44,33 @@ export async function fetchUserReconciliation(userId: string): Promise<UserRecon
   const approvedCompletions = completions.filter((c) => c.status === "approved");
   const rejectedCompletions = completions.filter((c) => c.status === "rejected");
 
+  // Total approved earnings across all task types (manual + platform) — informational.
   const totalApprovedEarnings = approvedCompletions.reduce((s, c) => s + c.reward, 0);
-  const platformVerifiedEarnings = approvedCompletions
+
+  // Platform reconciliation only considers approved PLATFORM tasks.
+  // Manual tasks are valid earnings but have no platform report and must not
+  // reduce the reconciliation percentage or block withdrawal approval.
+  const approvedPlatformCompletions = approvedCompletions.filter(
+    (c) => c.taskType === "platform"
+  );
+  const totalPlatformApprovedEarnings = approvedPlatformCompletions.reduce(
+    (s, c) => s + c.reward,
+    0
+  );
+  const platformVerifiedEarnings = approvedPlatformCompletions
     .filter((c) => !!c.verifiedBy)
     .reduce((s, c) => s + c.reward, 0);
-  const unverifiedEarnings = Math.max(0, totalApprovedEarnings - platformVerifiedEarnings);
+  const unverifiedEarnings = Math.max(
+    0,
+    totalPlatformApprovedEarnings - platformVerifiedEarnings
+  );
 
+  // Status reflects only platform verification coverage.
+  // Rejected tasks are correctly handled by wallet balance adjustments and do NOT
+  // block withdrawals — they are excluded from status here.
+  // Pending tasks are not withdrawable and do not participate in reconciliation.
   let status: UserReconciliation["status"] = "clean";
-  if (rejectedCompletions.length > 0) status = "flagged";
-  else if (unverifiedEarnings > 0.000001) status = "unverified";
+  if (unverifiedEarnings > 0.000001) status = "unverified";
 
   return {
     userId,
@@ -105,7 +125,7 @@ export async function fetchGlobalReconciliation(
 ): Promise<GlobalReconciliation> {
   type RawCompletion = {
     id: string; userId: string; taskId: string; taskTitle: string;
-    taskPlatform: string; reward: number;
+    taskPlatform: string; taskType: "manual" | "platform"; reward: number;
     status: "pending" | "approved" | "rejected";
     verifiedBy?: string; rejectReason: string; completedAt: Date;
   };
@@ -130,6 +150,7 @@ export async function fetchGlobalReconciliation(
       taskId: d.data().taskId as string,
       taskTitle: (d.data().taskTitle as string) || "Unknown Task",
       taskPlatform: (d.data().taskPlatform as string) || "",
+      taskType: (d.data().taskType as "manual" | "platform") || "platform",
       reward: (d.data().reward as number) || 0,
       status: d.data().status as "pending" | "approved" | "rejected",
       verifiedBy: d.data().verifiedBy as string | undefined,
@@ -141,7 +162,6 @@ export async function fetchGlobalReconciliation(
       e instanceof Error && (e.message.includes("permission") || e.message.includes("insufficient"));
     if (!isPermissionError) throw e;
 
-    // Fallback: query per-user (works with standard Firestore rules)
     const uids = knownUserIds ?? [];
     const perUserResults = await Promise.all(
       uids.map((uid) =>
@@ -160,6 +180,7 @@ export async function fetchGlobalReconciliation(
           taskId: d.data().taskId as string,
           taskTitle: (d.data().taskTitle as string) || "Unknown Task",
           taskPlatform: (d.data().taskPlatform as string) || "",
+          taskType: (d.data().taskType as "manual" | "platform") || "platform",
           reward: (d.data().reward as number) || 0,
           status: d.data().status as "pending" | "approved" | "rejected",
           verifiedBy: d.data().verifiedBy as string | undefined,
@@ -170,15 +191,14 @@ export async function fetchGlobalReconciliation(
     });
   }
 
-  //const approved = allCompletions.filter((c) => c.status === "approved");
-  //const rejected = allCompletions.filter((c) => c.status === "rejected");
-  //const verified = approved.filter((c) => !!c.verifiedBy);
-  //const unverified = approved.filter((c) => !c.verifiedBy);
-  const pending = allCompletions.filter((c) => c.status === "pending");
-const approved = allCompletions.filter((c) => c.status === "approved");
-const rejected = allCompletions.filter((c) => c.status === "rejected");
-const verified = approved.filter((c) => !!c.verifiedBy);
-const unverified = approved.filter((c) => !c.verifiedBy);
+  const approved = allCompletions.filter((c) => c.status === "approved");
+  const rejected = allCompletions.filter((c) => c.status === "rejected");
+
+  // Platform reconciliation only counts approved PLATFORM tasks.
+  // Approved manual tasks are excluded: they have no platform report requirement.
+  const platformApproved = approved.filter((c) => c.taskType === "platform");
+  const verified = platformApproved.filter((c) => !!c.verifiedBy);
+  const unverified = platformApproved.filter((c) => !c.verifiedBy);
 
   const totalMatchedAmount = verified.reduce((s, c) => s + c.reward, 0);
   const totalRejectedAmount = rejected.reduce((s, c) => s + c.reward, 0);
@@ -197,10 +217,9 @@ const unverified = approved.filter((c) => !c.verifiedBy);
     completedAt: c.completedAt,
   }));
 
-  // Combine unverified approved tasks and pending tasks together
-const combinedPending = [...unverified, ...pending];
-
-const pendingVerificationItems: PendingVerificationItem[] = combinedPending.map((c) => ({
+  // Pending verification: only approved PLATFORM tasks without a platform report.
+  // Pending-status tasks and manual tasks are intentionally excluded.
+  const pendingVerificationItems: PendingVerificationItem[] = unverified.map((c) => ({
     userId: c.userId,
     userEmail: userMap[c.userId]?.email || "",
     userName: userMap[c.userId]?.name || "Unknown",
@@ -208,7 +227,7 @@ const pendingVerificationItems: PendingVerificationItem[] = combinedPending.map(
     taskTitle: c.taskTitle,
     reward: c.reward,
     completedAt: c.completedAt,
-}));
+  }));
 
   return {
     totalMatchedAmount,
@@ -216,7 +235,7 @@ const pendingVerificationItems: PendingVerificationItem[] = combinedPending.map(
     totalRejectedAmount,
     totalRejectedCount: rejected.length,
     totalUnverifiedAmount,
-    totalUnverifiedCount: unverified.length + pending.length,
+    totalUnverifiedCount: unverified.length,
     totalApprovedAmount,
     totalWithdrawalRequestAmount: withdrawalAmount,
     isBalanced: totalMatchedAmount >= withdrawalAmount - 0.000001,
@@ -255,9 +274,12 @@ export async function comparePlatformReport(
 ): Promise<ReportComparisonResult> {
   const completionsSnap = await getDocs(collection(db, "taskCompletions"));
 
+  // Only approved PLATFORM tasks are compared against platform reports.
+  // Manual tasks do not appear in platform reports and must not be treated as missing.
   const ourApproved: Record<string, { userId: string; taskId: string; reward: number }> = {};
   completionsSnap.docs.forEach((d) => {
-    if (d.data().status === "approved") {
+    const taskType = (d.data().taskType as string) || "platform";
+    if (d.data().status === "approved" && taskType === "platform") {
       const key = `${d.data().userId as string}:${d.data().taskId as string}`;
       ourApproved[key] = {
         userId: d.data().userId as string,
