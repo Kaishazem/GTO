@@ -28,18 +28,31 @@ export async function fetchUserReconciliation(userId: string): Promise<UserRecon
   const q = query(collection(db, "taskCompletions"), where("userId", "==", userId));
   const snap = await getDocs(q);
 
-  const completions: CompletionRecord[] = snap.docs.map((d) => ({
-    id: d.id,
-    taskId: d.data().taskId as string,
-    taskTitle: (d.data().taskTitle as string) || "Unknown Task",
-    taskPlatform: (d.data().taskPlatform as string) || "",
-    taskType: (d.data().taskType as "manual" | "platform") || "platform",
-    reward: (d.data().reward as number) || 0,
-    status: (d.data().status as CompletionRecord["status"]) || "pending",
-    verifiedBy: d.data().verifiedBy as string | undefined,
-    rejectReason: (d.data().rejectReason as string) || (d.data().note as string) || undefined,
-    completedAt: (d.data().completedAt as Timestamp)?.toDate() || new Date(),
-  }));
+  const completions: CompletionRecord[] = snap.docs.map((d) => {
+    const explicitType = d.data().taskType as string | undefined;
+    const hasVerifiedBy = !!d.data().verifiedBy;
+    // If taskType field is missing, infer from verifiedBy:
+    // verifiedBy set → came from a platform postback → "platform"
+    // no verifiedBy → approved by admin, no platform report → "manual"
+    const taskType: "manual" | "platform" =
+      explicitType === "manual" || explicitType === "platform"
+        ? (explicitType as "manual" | "platform")
+        : hasVerifiedBy
+        ? "platform"
+        : "manual";
+    return {
+      id: d.id,
+      taskId: d.data().taskId as string,
+      taskTitle: (d.data().taskTitle as string) || "Unknown Task",
+      taskPlatform: (d.data().taskPlatform as string) || "",
+      taskType,
+      reward: (d.data().reward as number) || 0,
+      status: (d.data().status as CompletionRecord["status"]) || "pending",
+      verifiedBy: d.data().verifiedBy as string | undefined,
+      rejectReason: (d.data().rejectReason as string) || (d.data().note as string) || undefined,
+      completedAt: (d.data().completedAt as Timestamp)?.toDate() || new Date(),
+    };
+  });
 
   const approvedCompletions = completions.filter((c) => c.status === "approved");
   const rejectedCompletions = completions.filter((c) => c.status === "rejected");
@@ -144,19 +157,27 @@ export async function fetchGlobalReconciliation(
         name: (d.data().name as string) || "Unknown",
       };
     });
-    allCompletions = completionsSnap.docs.map((d) => ({
-      id: d.id,
-      userId: d.data().userId as string,
-      taskId: d.data().taskId as string,
-      taskTitle: (d.data().taskTitle as string) || "Unknown Task",
-      taskPlatform: (d.data().taskPlatform as string) || "",
-      taskType: (d.data().taskType as "manual" | "platform") || "platform",
-      reward: (d.data().reward as number) || 0,
-      status: d.data().status as "pending" | "approved" | "rejected",
-      verifiedBy: d.data().verifiedBy as string | undefined,
-      rejectReason: (d.data().rejectReason as string) || (d.data().note as string) || "",
-      completedAt: (d.data().completedAt as Timestamp)?.toDate() || new Date(),
-    }));
+    allCompletions = completionsSnap.docs.map((d) => {
+      const explicitType = d.data().taskType as string | undefined;
+      const hasVerifiedBy = !!d.data().verifiedBy;
+      const taskType: "manual" | "platform" =
+        explicitType === "manual" || explicitType === "platform"
+          ? (explicitType as "manual" | "platform")
+          : hasVerifiedBy ? "platform" : "manual";
+      return {
+        id: d.id,
+        userId: d.data().userId as string,
+        taskId: d.data().taskId as string,
+        taskTitle: (d.data().taskTitle as string) || "Unknown Task",
+        taskPlatform: (d.data().taskPlatform as string) || "",
+        taskType,
+        reward: (d.data().reward as number) || 0,
+        status: d.data().status as "pending" | "approved" | "rejected",
+        verifiedBy: d.data().verifiedBy as string | undefined,
+        rejectReason: (d.data().rejectReason as string) || (d.data().note as string) || "",
+        completedAt: (d.data().completedAt as Timestamp)?.toDate() || new Date(),
+      };
+    });
   } catch (e: unknown) {
     const isPermissionError =
       e instanceof Error && (e.message.includes("permission") || e.message.includes("insufficient"));
@@ -174,13 +195,19 @@ export async function fetchGlobalReconciliation(
         if (!userMap[uid]) {
           userMap[uid] = { email: d.data().userEmail as string || "", name: d.data().userName as string || "Unknown" };
         }
+        const explicitType2 = d.data().taskType as string | undefined;
+        const hasVerifiedBy2 = !!d.data().verifiedBy;
+        const taskType2: "manual" | "platform" =
+          explicitType2 === "manual" || explicitType2 === "platform"
+            ? (explicitType2 as "manual" | "platform")
+            : hasVerifiedBy2 ? "platform" : "manual";
         allCompletions.push({
           id: d.id,
           userId: uid,
           taskId: d.data().taskId as string,
           taskTitle: (d.data().taskTitle as string) || "Unknown Task",
           taskPlatform: (d.data().taskPlatform as string) || "",
-          taskType: (d.data().taskType as "manual" | "platform") || "platform",
+          taskType: taskType2,
           reward: (d.data().reward as number) || 0,
           status: d.data().status as "pending" | "approved" | "rejected",
           verifiedBy: d.data().verifiedBy as string | undefined,

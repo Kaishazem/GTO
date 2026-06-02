@@ -830,14 +830,14 @@ export default function AdminPage() {
 
   async function handleApproveWithdrawal(id: string) {
     try {
-      if (globalRecon != null && !globalRecon.isBalanced) {
-        throw new Error("Approval disabled until global reconciliation shows 100% match.");
-      }
       const w = allWithdrawals.find((x) => x.id === id);
       if (!w) throw new Error("Withdrawal not found");
       const recon = reconciliations[w.userId];
       if (!recon || recon.status !== "clean") {
         throw new Error("Approval blocked until reconciliation is 100% clean.");
+      }
+      if (recon.totalApprovedEarnings < w.amount - 0.000001) {
+        throw new Error("Approval blocked: approved earnings do not cover the withdrawal amount.");
       }
       await approveWithdrawal(id);
       toast({ title: "✅ Approved" });
@@ -1920,6 +1920,9 @@ export default function AdminPage() {
             const netPayout = w.netAmount ?? Math.max(0, w.amount - commission - gas);
             const addr = w.walletAddress || w.trc20Address || "";
             const addrShort = addr.length > 20 ? addr.slice(0, 10) + "…" + addr.slice(-10) : addr;
+            // Per-user check: approved earnings (manual + platform) must cover withdrawal amount
+            const modalRecon = reconciliations[w.userId];
+            const confirmDisabled = modalRecon != null && modalRecon.totalApprovedEarnings < w.amount - 0.000001;
             return (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
                 onClick={() => setConfirmApproveId(null)}>
@@ -1963,7 +1966,7 @@ export default function AdminPage() {
                       className="flex-1 border-white/15 text-white/60 hover:text-white">
                       Cancel
                     </Button>
-                    <Button onClick={handleConfirmApprove} disabled={globalRecon != null && !globalRecon.isBalanced}
+                    <Button onClick={handleConfirmApprove} disabled={confirmDisabled}
                       className="flex-1 bg-emerald-500 hover:bg-emerald-400 text-white">
                       <CheckCircle className="w-4 h-4 mr-1.5" />Confirm Approval
                     </Button>
