@@ -146,7 +146,7 @@ export default function WalletPage() {
 
       await updateDoc(doc(db, "users", profile.uid), {
         trc20Address: walletAddress,
-        walletAddressLower: addrLower,
+        walletAddressLower: walletAddress.toLowerCase(),
       });
       await refreshProfile();
       toast({ title: "✅ Saved", description: "Wallet address saved" });
