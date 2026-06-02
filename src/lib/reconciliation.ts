@@ -205,6 +205,11 @@ export async function fetchGlobalReconciliation(
   const totalUnverifiedAmount = unverified.reduce((s, c) => s + c.reward, 0);
   const totalApprovedAmount = approved.reduce((s, c) => s + c.reward, 0);
 
+  // Manual approved earnings are valid withdrawable funds — no platform report needed.
+  const manualApprovedAmount = approved
+    .filter((c) => c.taskType === "manual")
+    .reduce((s, c) => s + c.reward, 0);
+
   const rejectedItems: RejectedItem[] = rejected.map((c) => ({
     userId: c.userId,
     userEmail: userMap[c.userId]?.email || "",
@@ -238,7 +243,7 @@ export async function fetchGlobalReconciliation(
     totalUnverifiedCount: unverified.length,
     totalApprovedAmount,
     totalWithdrawalRequestAmount: withdrawalAmount,
-    isBalanced: totalMatchedAmount >= withdrawalAmount - 0.000001,
+    isBalanced: (totalMatchedAmount + manualApprovedAmount) >= withdrawalAmount - 0.000001,
     rejectedItems,
     pendingVerificationItems,
   };

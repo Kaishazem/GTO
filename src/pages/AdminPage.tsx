@@ -830,7 +830,7 @@ export default function AdminPage() {
 
   async function handleApproveWithdrawal(id: string) {
     try {
-      if (!globalRecon?.isBalanced) {
+      if (globalRecon != null && !globalRecon.isBalanced) {
         throw new Error("Approval disabled until global reconciliation shows 100% match.");
       }
       const w = allWithdrawals.find((x) => x.id === id);
@@ -1194,15 +1194,21 @@ export default function AdminPage() {
     return true;
   });
 
-  // Auto-load reconciliation for all pending withdrawals whenever the list changes
+  // Auto-load reconciliation for all pending withdrawals whenever the list changes.
+  // Always re-fetch (no stale-cache guard) so rule/logic fixes take effect immediately.
+  // Also auto-loads globalRecon so the Confirm Approval modal never starts in a null state.
   useEffect(() => {
+    if (pendingWithdrawals.length === 0) return;
     pendingWithdrawals.forEach((w) => {
-      if (reconciliations[w.userId] || loadingRecon.has(w.userId)) return;
+      if (loadingRecon.has(w.userId)) return;
       setLoadingRecon((prev) => new Set([...prev, w.userId]));
       fetchUserReconciliation(w.userId)
         .then((recon) => setReconciliations((prev) => ({ ...prev, [w.userId]: recon })))
         .finally(() => setLoadingRecon((prev) => { const s = new Set(prev); s.delete(w.userId); return s; }));
     });
+    if (!globalRecon && !loadingGlobalRecon) {
+      handleFetchGlobalRecon();
+    }
   }, [allWithdrawals]);
   const pendingNetworkTasks = tasks.filter((t) => t.networkStatus === "pending").length;
   const approvedNetworkTasks = tasks.filter((t) => t.networkStatus === "approved").length;
@@ -1957,7 +1963,7 @@ export default function AdminPage() {
                       className="flex-1 border-white/15 text-white/60 hover:text-white">
                       Cancel
                     </Button>
-                    <Button onClick={handleConfirmApprove} disabled={!globalRecon?.isBalanced}
+                    <Button onClick={handleConfirmApprove} disabled={globalRecon != null && !globalRecon.isBalanced}
                       className="flex-1 bg-emerald-500 hover:bg-emerald-400 text-white">
                       <CheckCircle className="w-4 h-4 mr-1.5" />Confirm Approval
                     </Button>
