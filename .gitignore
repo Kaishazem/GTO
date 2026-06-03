@@ -3,6 +3,5 @@ dist/
 .env
 .env.local
 .firebase*
-vite.config.*
 .DS_Store
 *.zip
