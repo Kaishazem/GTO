@@ -586,9 +586,18 @@ export default function AdminPage() {
       let offers: Record<string, unknown>[] = [];
 
       if (networkId === "adgem") {
-        const r = await fetch(`${network.apiBase}?api_key=${apiKey}&limit=50`);
-        const d = await r.json() as { data?: Record<string, unknown>[] };
-        offers = d.data || [];
+  const r = await fetch('/api/import-adgem', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      platformName: 'ADGEM',
+      firebaseProjectId: 'green-task-orbit',
+      firebaseApiKey: import.meta.env.VITE_FIREBASE_API_KEY || 'AIzaSyCYC0sGV6EjRA3q4fmhjxSQck2Y0Era_SM'
+    })
+  });
+  const d = await r.json();
+  offers = d.offers || [];
+}
       } else if (networkId === "lootably") {
         const r = await fetch(`${network.apiBase}?token=${apiKey}&limit=50`);
         const d = await r.json() as { offers?: Record<string, unknown>[] };
