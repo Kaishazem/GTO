@@ -584,31 +584,19 @@ export default function AdminPage() {
     try {
       const network = AD_NETWORKS.find((n) => n.id === networkId)!;
       let offers: Record<string, unknown>[] = [];
-
-      if (networkId === "adgem") {
-  const r = await fetch('/api/import-adgem', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      platformName: 'ADGEM',
-      firebaseProjectId: 'green-task-orbit',
-      firebaseApiKey: import.meta.env.VITE_FIREBASE_API_KEY || 'AIzaSyCYC0sGV6EjRA3q4fmhjxSQck2Y0Era_SM'
-    })
-  });
-  const d = await r.json();
-  offers = d.offers || [];
-}
-      } else if (networkId === "lootably") {
-        const r = await fetch(`${network.apiBase}?token=${apiKey}&limit=50`);
-        const d = await r.json() as { offers?: Record<string, unknown>[] };
-        offers = d.offers || [];
-      } else if (networkId === "cpagrip") {
-        const r = await fetch(`${network.apiBase}?user_id=${apiKey}&type=1&output=json`);
-        const d = await r.json() as { offers?: Record<string, unknown>[] };
-        offers = d.offers || [];
-      } else {
-        throw new Error("Direct API fetch not supported for this network due to CORS. Use the postback/webhook system instead.");
-      }
+    // كود عام لكل المنصات
+    const r = await fetch('/api/import-platform', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        platformName: networkId.toUpperCase(),
+        firebaseProjectId: 'green-task-orbit',
+        firebaseApiKey: import.meta.env.VITE_FIREBASE_API_KEY || 
+          'AIzaSyCYC0sGV6EjRA3q4fmhjxSQck2Y0Era_SM'
+      })
+    });
+    const d = await r.json();
+    offers = d.offers || [];
 
       if (offers.length === 0) throw new Error("No offers returned. Check your API key.");
       setImportedOffers(offers);
