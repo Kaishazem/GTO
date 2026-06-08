@@ -93,9 +93,24 @@ service cloud.firestore {
 
     // ── walletTransactions/{txId} ──────────────────────────────────────────
     // Users can read their own wallet transaction logs; admins can read/write all.
+    // Server-side postback handler also writes wallet transactions (unauthenticated REST).
     match /walletTransactions/{txId} {
       allow create, update, delete: if isAdmin();
       allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    // ── postbackConversions/{convId} ───────────────────────────────────────
+    // Written by the server-side postback API (unauthenticated REST with API key).
+    // Admins can read and write for monitoring; users have no access.
+    match /postbackConversions/{convId} {
+      allow read, write: if isAdmin();
+    }
+
+    // ── postbackLogs/{logId} ───────────────────────────────────────────────
+    // Full audit trail of every received postback, including rejections.
+    // Written server-side; admins can read for monitoring.
+    match /postbackLogs/{logId} {
+      allow read, write: if isAdmin();
     }
 
     // ── withdrawals/{withdrawalId} ─────────────────────────────────────────

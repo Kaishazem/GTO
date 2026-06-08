@@ -226,16 +226,50 @@ function PlatformEditForm({
   );
 }
 
-interface PostbackEvent {
+interface PostbackConversion {
   id: string;
-  network: string;
+  platformId: string;
+  platformName: string;
+  externalConversionId: string;
+  dedupKey: string;
   userId: string;
   taskId: string;
-  status: "approved" | "rejected";
+  completionId: string;
+  status: "settled" | "rejected" | "skipped" | "duplicate" | "processing" | "invalid_params" | "invalid_platform" | "invalid_signature" | "invalid_secret" | "replay_prevented" | string;
+  conversionStatus: "approved" | "rejected";
   amount: number;
-  reason?: string;
+  error: string;
+  processingMs: number;
   receivedAt: string;
-  processed: boolean;
+  processedAt: string;
+}
+
+interface PostbackLog {
+  id: string;
+  type: "settled" | "rejected" | "duplicate" | "invalid_params" | "invalid_platform" | "invalid_signature" | "replay_attack" | "skipped" | string;
+  message: string;
+  platformId: string;
+  userId: string;
+  taskId: string;
+  convId: string;
+  amount: number;
+  completionId: string;
+  processingMs: number;
+  receivedAt: string;
+  createdAt: string;
+}
+
+interface PostbackStats {
+  total: number;
+  settled: number;
+  rejected: number;
+  skipped: number;
+  duplicates: number;
+  processing: number;
+  failed: number;
+  totalSettledAmount: number;
+  byPlatform: Record<string, { total: number; settled: number; amount: number }>;
+  avgProcessingMs: number;
 }
 
 interface AdminAlert {
@@ -366,9 +400,12 @@ export default function AdminPage() {
   const [selectedImportOffers, setSelectedImportOffers] = useState<Set<number>>(new Set());
   const [importingOffers, setImportingOffers] = useState(false);
 
-  const [postbacks, setPostbacks] = useState<PostbackEvent[]>([]);
+  const [conversions, setConversions] = useState<PostbackConversion[]>([]);
+  const [conversionLogs, setConversionLogs] = useState<PostbackLog[]>([]);
+  const [conversionStats, setConversionStats] = useState<PostbackStats | null>(null);
   const [loadingPostbacks, setLoadingPostbacks] = useState(false);
-  const [processingPostback, setProcessingPostback] = useState<string | null>(null);
+  const [postbackFilter, setPostbackFilter] = useState<string>("all");
+  const [postbackPlatformFilter, setPostbackPlatformFilter] = useState<string>("");
 
   // Email Ban System
   const [bannedEmails, setBannedEmails] = useState<{ email: string; reason: string; bannedAt: Date; bannedBy: string }[]>([]);
@@ -778,63 +815,33 @@ export default function AdminPage() {
     setTasksLoading(false);
   }
 
-  async function fetchPostbacks() {
+  async function fetchConversions(statusFilter = postbackFilter, platformFilter = postbackPlatformFilter) {
     setLoadingPostbacks(true);
     try {
-      const secret = postbackSecret || networkKeys.postbackSecret || "change-me-in-admin-settings";
-      const res = await fetch(`/api/postbacks?secret=${encodeURIComponent(secret)}`);
-      if (!res.ok) throw new Error("Failed to fetch postbacks");
-      const data = await res.json() as { events: PostbackEvent[] };
-      setPostbacks(data.events || []);
-    } catch {
-      toast({ title: "Error", description: "Could not fetch postback events. Check your secret.", variant: "destructive" });
+      const secret = postbackSecret || networkKeys.postbackSecret || "";
+      const params = new URLSearchParams({ secret });
+      if (statusFilter && statusFilter !== "all") params.set("status", statusFilter);
+      if (platformFilter) params.set("platform", platformFilter);
+      params.set("limit", "100");
+      const res = await fetch(`/api/postbacks-admin?${params}`);
+      if (!res.ok) throw new Error(`Server returned ${res.status}`);
+      const data = await res.json() as {
+        conversions: PostbackConversion[];
+        logs: PostbackLog[];
+        stats: PostbackStats;
+      };
+      setConversions(data.conversions || []);
+      setConversionLogs(data.logs || []);
+      setConversionStats(data.stats || null);
+    } catch (e) {
+      toast({ title: "Error loading conversions", description: e instanceof Error ? e.message : "Failed", variant: "destructive" });
     } finally {
       setLoadingPostbacks(false);
     }
   }
 
-  async function processPostback(event: PostbackEvent) {
-    setProcessingPostback(event.id);
-    try {
-      const completionsSnap = await getDocs(collection(db, "taskCompletions"));
-      const match = completionsSnap.docs.find(
-        (d) =>
-          d.data().taskId === event.taskId &&
-          d.data().userId === event.userId &&
-          d.data().status === "pending" &&
-          (d.data().taskType || "platform") === "platform"
-      );
-
-      if (match) {
-        const result = await settleTaskCompletion(doc(db, "taskCompletions", match.id), event.status, {
-          source: "postback",
-          actorName: event.network,
-          verifiedBy: event.network,
-          reason: event.reason,
-        });
-        if (!result.applied) {
-          toast({ title: "Skipped", description: "Postback already processed before." });
-        }
-      }
-
-      // Mark postback as processed
-      const secret = postbackSecret || networkKeys.postbackSecret || "change-me-in-admin-settings";
-      await fetch(`/api/postbacks/${event.id}/mark-processed?secret=${encodeURIComponent(secret)}`, { method: "POST" });
-      setPostbacks((prev) => prev.filter((e) => e.id !== event.id));
-      await fetchManualCompletions();
-      toast({ title: `✅ Processed — ${event.status}` });
-    } catch (e) {
-      toast({ title: "Error", description: e instanceof Error ? e.message : "Failed", variant: "destructive" });
-    } finally {
-      setProcessingPostback(null);
-    }
-  }
-
-  async function processAllPostbacks() {
-    for (const event of postbacks) {
-      await processPostback(event);
-    }
-  }
+  // Keep as alias for legacy tab-switch wiring
+  const fetchPostbacks = fetchConversions;
 
   async function fetchOffersFromNetwork(platformId: string) {
     setFetchingNetwork(platformId);
@@ -1649,7 +1656,7 @@ export default function AdminPage() {
     { id: "tasks", label: "Tasks" },
     { id: "platforms", label: "Platforms" },
     { id: "import", label: "Import Tasks" },
-    { id: "postbacks", label: `Postbacks (${postbacks.length})` },
+    { id: "postbacks", label: `Postbacks${conversionStats ? ` (${conversionStats.total})` : ""}` },
     { id: "analytics", label: "Analytics" },
     { id: "users", label: "Users" },
     { id: "settings", label: "Settings" },
@@ -3212,7 +3219,7 @@ export default function AdminPage() {
             <h2 className="font-semibold text-white mb-2 flex items-center gap-2"><Link2 className="w-4 h-4 text-emerald-400" />Your Postback URL</h2>
             <p className="text-xs text-white/40 mb-3">Use this URL in each ad network's postback settings. Replace macros with the network's variable syntax.</p>
             <div className="bg-slate-900 border border-white/10 rounded-xl p-3 font-mono text-xs text-emerald-300 break-all">
-              {postbackBaseUrl}?network=NETWORK_ID&user_id=USER_ID&task_id=TASK_ID&status=approved&amount=PAYOUT&secret={postbackSecret || "YOUR_SECRET"}
+              {postbackBaseUrl}?platform=PLATFORM_ID&user_id=USER_ID&task_id=TASK_ID&conv_id=CONV_ID&status=approved&amount=PAYOUT&secret={postbackSecret || "YOUR_SECRET"}
             </div>
             {platforms.length > 0 && (
               <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-3">
@@ -3303,66 +3310,200 @@ export default function AdminPage() {
       {/* === POSTBACKS === */}
       {tab === "postbacks" && (
         <div className="space-y-4">
-          <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="font-semibold text-white">Pending Postback Events</h2>
-              <div className="flex gap-2">
-                <Button size="sm" variant="outline" onClick={fetchPostbacks} disabled={loadingPostbacks}
-                  className="border-white/20 text-white/60 hover:text-white">
-                  <RefreshCw className={cn("w-4 h-4 mr-1", loadingPostbacks && "animate-spin")} />Refresh
-                </Button>
-                {postbacks.length > 0 && (
-                  <Button size="sm" onClick={processAllPostbacks}
-                    className="bg-emerald-500 hover:bg-emerald-400 text-white rounded-lg">
-                    Process All ({postbacks.length})
-                  </Button>
-                )}
+
+          {/* ── Stats cards ─────────────────────────────────────────────── */}
+          {conversionStats && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-2xl p-4">
+                <p className="text-xs text-emerald-300/70 mb-1">Settled</p>
+                <p className="text-2xl font-bold text-white">{conversionStats.settled}</p>
+                <p className="text-xs text-emerald-400 mt-1">{formatCurrency(conversionStats.totalSettledAmount)} total</p>
+              </div>
+              <div className="bg-red-500/10 border border-red-500/20 rounded-2xl p-4">
+                <p className="text-xs text-red-300/70 mb-1">Rejected / Failed</p>
+                <p className="text-2xl font-bold text-white">{conversionStats.rejected + conversionStats.failed}</p>
+                <p className="text-xs text-white/30 mt-1">{conversionStats.failed} validation failures</p>
+              </div>
+              <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-2xl p-4">
+                <p className="text-xs text-yellow-300/70 mb-1">Duplicates Blocked</p>
+                <p className="text-2xl font-bold text-white">{conversionStats.duplicates}</p>
+                <p className="text-xs text-white/30 mt-1">replay-safe</p>
+              </div>
+              <div className="bg-blue-500/10 border border-blue-500/20 rounded-2xl p-4">
+                <p className="text-xs text-blue-300/70 mb-1">Total Received</p>
+                <p className="text-2xl font-bold text-white">{conversionStats.total}</p>
+                <p className="text-xs text-white/30 mt-1">avg {conversionStats.avgProcessingMs}ms</p>
               </div>
             </div>
+          )}
 
-            <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl p-3 mb-4 text-xs text-blue-300 flex gap-2">
-              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-              <span>
-                Postback events are received from ad networks when a user completes an offer.
-                Click "Process All" to auto-approve/reject task completions and update user balances.
-                These events are stored in memory and will be lost if the server restarts.
-              </span>
+          {/* ── Controls ────────────────────────────────────────────────── */}
+          <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+              <h2 className="font-semibold text-white flex items-center gap-2">
+                <Link2 className="w-4 h-4 text-emerald-400" />Conversion History
+              </h2>
+              <Button size="sm" variant="outline" onClick={() => fetchConversions(postbackFilter, postbackPlatformFilter)} disabled={loadingPostbacks}
+                className="border-white/20 text-white/60 hover:text-white">
+                <RefreshCw className={cn("w-4 h-4 mr-1", loadingPostbacks && "animate-spin")} />Refresh
+              </Button>
+            </div>
+
+            {/* Filter pills */}
+            <div className="flex gap-2 flex-wrap mb-4">
+              {(["all","settled","rejected","duplicate","invalid_signature","invalid_platform","replay_prevented"] as const).map((f) => (
+                <button key={f} onClick={() => { setPostbackFilter(f); fetchConversions(f, postbackPlatformFilter); }}
+                  className={cn("px-3 py-1 rounded-full text-xs font-medium transition-all border",
+                    postbackFilter === f
+                      ? "bg-emerald-500 text-white border-emerald-500"
+                      : "bg-white/5 text-white/50 border-white/10 hover:border-white/20")}>
+                  {f === "all" ? "All" : f === "settled" ? "✅ Settled" : f === "rejected" ? "❌ Rejected" : f === "duplicate" ? "↩ Duplicates" : f === "invalid_signature" ? "🔑 Bad Sig" : f === "invalid_platform" ? "⛔ Bad Platform" : "⏱ Replay"}
+                </button>
+              ))}
+              {conversionStats && Object.keys(conversionStats.byPlatform).length > 0 && (
+                <select value={postbackPlatformFilter}
+                  onChange={(e) => { setPostbackPlatformFilter(e.target.value); fetchConversions(postbackFilter, e.target.value); }}
+                  className="px-3 py-1 rounded-full text-xs bg-white/5 border border-white/10 text-white/60">
+                  <option value="">All Platforms</option>
+                  {Object.keys(conversionStats.byPlatform).map(p => (
+                    <option key={p} value={p}>{p}</option>
+                  ))}
+                </select>
+              )}
             </div>
 
             {loadingPostbacks ? (
-              <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin text-emerald-400" /></div>
-            ) : postbacks.length === 0 ? (
-              <p className="text-white/40 text-center py-8 text-sm">No pending postback events</p>
+              <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-emerald-400" /></div>
+            ) : conversions.length === 0 ? (
+              <div className="text-center py-12">
+                <Link2 className="w-8 h-8 text-white/15 mx-auto mb-3" />
+                <p className="text-white/40 text-sm">No conversions found</p>
+                <p className="text-white/20 text-xs mt-1">Postbacks are processed automatically when ad networks send them</p>
+              </div>
             ) : (
-              <div className="space-y-3">
-                {postbacks.map((event) => (
-                  <div key={event.id} className="bg-white/5 border border-white/10 rounded-xl p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="flex items-center gap-2 mb-1">
-                          <Badge className={cn("text-xs border", event.status === "approved" ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30" : "bg-red-500/20 text-red-300 border-red-500/30")}>
-                            {event.status === "approved" ? "✅ Approved" : "❌ Rejected"}
-                          </Badge>
-                          <Badge className="bg-blue-500/20 text-blue-300 border-blue-500/30 text-xs">{event.network}</Badge>
+              <div className="space-y-2">
+                {conversions.map((cv) => {
+                  const isSettled  = cv.status === "settled";
+                  const isRejected = cv.status === "rejected";
+                  const isDupe     = cv.status === "duplicate";
+                  const isFailed   = ["invalid_params","invalid_platform","invalid_signature","invalid_secret","replay_prevented"].includes(cv.status);
+                  return (
+                    <div key={cv.id} className={cn("border rounded-xl p-4", isSettled ? "bg-emerald-500/5 border-emerald-500/20" : isFailed ? "bg-red-500/5 border-red-500/20" : isDupe ? "bg-yellow-500/5 border-yellow-500/15" : "bg-white/5 border-white/10")}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-2 flex-wrap">
+                            <Badge className={cn("text-xs border shrink-0",
+                              isSettled ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30"
+                              : isRejected ? "bg-orange-500/20 text-orange-300 border-orange-500/30"
+                              : isDupe ? "bg-yellow-500/20 text-yellow-300 border-yellow-500/30"
+                              : isFailed ? "bg-red-500/20 text-red-300 border-red-500/30"
+                              : "bg-white/10 text-white/50 border-white/20")}>
+                              {isSettled ? "✅ Settled" : isRejected ? "❌ Rejected" : isDupe ? "↩ Duplicate" : isFailed ? "⛔ " + cv.status.replace(/_/g," ") : cv.status}
+                            </Badge>
+                            <Badge className="bg-blue-500/20 text-blue-300 border-blue-500/30 text-xs shrink-0">
+                              {cv.platformName || cv.platformId}
+                            </Badge>
+                            {cv.conversionStatus === "rejected" && cv.status !== "rejected" && (
+                              <Badge className="bg-orange-500/15 text-orange-300/70 border-orange-500/20 text-xs shrink-0">platform: rejected</Badge>
+                            )}
+                          </div>
+                          <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs text-white/40">
+                            <span>User: <span className="font-mono text-white/60 truncate">{cv.userId}</span></span>
+                            <span>Task: <span className="font-mono text-white/60 truncate">{cv.taskId}</span></span>
+                            {cv.externalConversionId && <span className="col-span-2">Conv ID: <span className="font-mono text-white/50">{cv.externalConversionId}</span></span>}
+                            {cv.completionId && <span className="col-span-2">Completion: <span className="font-mono text-white/50">{cv.completionId}</span></span>}
+                          </div>
+                          {cv.error && (
+                            <p className="text-xs text-red-400/80 mt-1.5 bg-red-500/10 rounded px-2 py-1">{cv.error}</p>
+                          )}
+                          <p className="text-xs text-white/20 mt-1.5">
+                            {cv.receivedAt ? new Date(cv.receivedAt).toLocaleString("en-US") : "—"}
+                            {cv.processingMs > 0 && <span className="ml-2">· {cv.processingMs}ms</span>}
+                          </p>
                         </div>
-                        <p className="text-xs text-white/50">User: <span className="font-mono">{event.userId}</span></p>
-                        <p className="text-xs text-white/50">Task: <span className="font-mono">{event.taskId}</span></p>
-                        {event.reason && <p className="text-xs text-red-400/70">Reason: {event.reason}</p>}
-                        <p className="text-xs text-white/30 mt-1">{new Date(event.receivedAt).toLocaleString("en-US")}</p>
+                        <div className="shrink-0 text-right">
+                          <div className={cn("text-lg font-bold", isSettled ? "text-emerald-400" : "text-white/30")}>
+                            {formatCurrency(cv.amount)}
+                          </div>
+                        </div>
                       </div>
-                      <div className="shrink-0 text-right">
-                        <div className="text-lg font-bold text-emerald-400">{formatCurrency(event.amount)}</div>
-                        <Button size="sm" onClick={() => processPostback(event)} disabled={processingPostback === event.id}
-                          className="mt-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 rounded-lg text-xs h-7" variant="outline">
-                          {processingPostback === event.id ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : null}
-                          Process
-                        </Button>
-                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* ── Platform breakdown ──────────────────────────────────────── */}
+          {conversionStats && Object.keys(conversionStats.byPlatform).length > 0 && (
+            <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
+              <h3 className="font-semibold text-white text-sm mb-3">Per-Platform Summary</h3>
+              <div className="grid md:grid-cols-2 gap-2">
+                {Object.entries(conversionStats.byPlatform).map(([platform, data]) => (
+                  <div key={platform} className="bg-white/3 border border-white/8 rounded-xl p-3 flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-medium text-white">{platform}</p>
+                      <p className="text-xs text-white/40">{data.total} total · {data.settled} settled</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-emerald-400 font-semibold text-sm">{formatCurrency(data.amount)}</p>
+                      <p className="text-xs text-white/30">{data.total > 0 ? Math.round((data.settled / data.total) * 100) : 0}% success</p>
                     </div>
                   </div>
                 ))}
               </div>
-            )}
+            </div>
+          )}
+
+          {/* ── Recent log entries ──────────────────────────────────────── */}
+          {conversionLogs.length > 0 && (
+            <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
+              <h3 className="font-semibold text-white text-sm mb-3">Recent Audit Log</h3>
+              <div className="space-y-1 max-h-72 overflow-y-auto">
+                {conversionLogs.map((log) => (
+                  <div key={log.id} className={cn("flex items-start gap-2 text-xs px-2 py-1.5 rounded-lg",
+                    log.type === "settled" ? "text-emerald-400/80 bg-emerald-500/5"
+                    : log.type === "duplicate" ? "text-yellow-400/70 bg-yellow-500/5"
+                    : ["invalid_signature","replay_attack","invalid_platform","invalid_params","invalid_secret"].includes(log.type) ? "text-red-400/70 bg-red-500/5"
+                    : "text-white/40 bg-white/3")}>
+                    <span className="shrink-0 font-mono text-white/20 w-4">
+                      {log.type === "settled" ? "✓" : log.type === "duplicate" ? "↩" : ["invalid_signature","replay_attack","invalid_platform","invalid_params","invalid_secret"].includes(log.type) ? "⛔" : "·"}
+                    </span>
+                    <span className="flex-1 truncate">
+                      <span className="font-medium">[{log.platformId || "?"}]</span> {log.message}
+                    </span>
+                    <span className="shrink-0 text-white/20">{log.createdAt ? new Date(log.createdAt).toLocaleTimeString() : ""}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ── Postback URL reference ──────────────────────────────────── */}
+          <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
+            <h3 className="font-semibold text-white text-sm mb-2 flex items-center gap-2"><Link2 className="w-4 h-4 text-blue-400" />Your Postback URL</h3>
+            <p className="text-xs text-white/40 mb-2">Configure this in each ad network's postback settings. Replace macros with the network's variable syntax.</p>
+            <div className="bg-slate-900 border border-white/10 rounded-xl p-3 font-mono text-xs text-emerald-300 break-all mb-3">
+              {postbackBaseUrl}?platform=PLATFORM_ID&user_id=USER_ID&task_id=TASK_ID&conv_id=CONV_ID&status=approved&amount=PAYOUT&secret={postbackSecret || "YOUR_SECRET"}
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-xs text-white/50">
+              {[
+                ["platform", "Your platform ID from Firestore"],
+                ["user_id", "GTO user ID (pass via macro)"],
+                ["task_id", "GTO task ID"],
+                ["conv_id", "Ad network's conversion/transaction ID"],
+                ["status", "approved or rejected"],
+                ["amount", "Payout amount in USD"],
+                ["secret", "Postback secret from Settings tab"],
+                ["sig", "Optional: HMAC-SHA256 signature"],
+                ["ts", "Optional: Unix timestamp (replay guard)"],
+              ].map(([param, desc]) => (
+                <div key={param} className="flex gap-2">
+                  <span className="font-mono text-blue-400/70 shrink-0">{param}</span>
+                  <span className="text-white/30">{desc}</span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}
