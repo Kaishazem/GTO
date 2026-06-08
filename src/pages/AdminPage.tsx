@@ -50,13 +50,181 @@ const NETWORK_STATUS_CONFIG = {
   rejected: { label: "Rejected", cls: "bg-red-500/20 text-red-300 border-red-500/30" },
 };
 
-const AD_NETWORKS = [
-  { id: "adgem", name: "AdGem", url: "https://adgem.com", apiBase: "https://api.adgem.com/v1/offers" },
-  { id: "lootably", name: "Lootably", url: "https://lootably.com", apiBase: "https://api.lootably.com/api/v1/offers" },
-  { id: "cpabuild", name: "CPABuild", url: "https://cpabuild.com", apiBase: "https://api.cpabuild.com/offers" },
-  { id: "monetizer", name: "Monetizer", url: "https://monetizer.media", apiBase: "https://api.monetizer.media/v1/offers" },
-  { id: "cpagrip", name: "CPAGrip", url: "https://cpagrip.com", apiBase: "https://www.cpagrip.com/api.php" },
-];
+// Platform form type used by both the Add form and the inline Edit form
+type PlatformFormState = {
+  name: string;
+  displayName: string;
+  enabled: boolean;
+  apiBase: string;
+  endpoint: string;
+  authenticationType: "bearer" | "apiKeyHeader" | "queryParam" | "basicAuth";
+  apiKey: string;
+  apiKeyParam: string;
+  apiKeyHeaderName: string;
+  basicAuthUser: string;
+  requestMethod: "GET" | "POST";
+  headersRaw: string;
+  queryParamsRaw: string;
+  responsePath: string;
+  offerMappingRaw: string;
+  postbackUrl: string;
+  autoImport: boolean;
+  importInterval: number;
+  rateLimit: number;
+};
+
+function PlatformEditForm({
+  initialForm,
+  saving,
+  onSave,
+  onCancel,
+}: {
+  initialForm: PlatformFormState;
+  saving: boolean;
+  onSave: (form: PlatformFormState) => void;
+  onCancel: () => void;
+}) {
+  const [form, setForm] = useState<PlatformFormState>(initialForm);
+  const set = (patch: Partial<PlatformFormState>) => setForm((f) => ({ ...f, ...patch }));
+
+  return (
+    <div className="mt-3 pt-3 border-t border-white/10 space-y-4">
+      <p className="text-xs font-semibold text-white/50 uppercase tracking-wide">Edit Configuration</p>
+      <div className="grid md:grid-cols-2 gap-3">
+        <div>
+          <label className="text-xs text-white/40 mb-1 block">Display Name</label>
+          <input value={form.displayName} onChange={(e) => set({ displayName: e.target.value })}
+            placeholder="e.g. AdGem"
+            className="w-full bg-white/10 border border-white/20 text-white text-sm rounded-lg px-3 py-2" />
+        </div>
+        <div>
+          <label className="text-xs text-white/40 mb-1 block">API Base URL</label>
+          <input value={form.apiBase} onChange={(e) => set({ apiBase: e.target.value })}
+            placeholder="https://api.example.com/v1"
+            className="w-full bg-white/10 border border-white/20 text-white text-sm rounded-lg px-3 py-2" />
+        </div>
+        <div>
+          <label className="text-xs text-white/40 mb-1 block">Endpoint Path</label>
+          <input value={form.endpoint} onChange={(e) => set({ endpoint: e.target.value })}
+            placeholder="/offers"
+            className="w-full bg-white/10 border border-white/20 text-white text-sm rounded-lg px-3 py-2" />
+        </div>
+        <div>
+          <label className="text-xs text-white/40 mb-1 block">Authentication Type</label>
+          <select value={form.authenticationType} onChange={(e) => set({ authenticationType: e.target.value as PlatformFormState["authenticationType"] })}
+            className="w-full bg-white/10 border border-white/20 text-white text-sm rounded-lg px-3 py-2">
+            <option value="queryParam">Query Parameter</option>
+            <option value="bearer">Bearer Token</option>
+            <option value="apiKeyHeader">API Key Header</option>
+            <option value="basicAuth">Basic Auth</option>
+          </select>
+        </div>
+        <div>
+          <label className="text-xs text-white/40 mb-1 block">API Key / Secret</label>
+          <input value={form.apiKey} onChange={(e) => set({ apiKey: e.target.value })}
+            placeholder="Your API key or bearer token"
+            className="w-full bg-white/10 border border-white/20 text-white text-sm font-mono rounded-lg px-3 py-2" />
+        </div>
+        {form.authenticationType === "queryParam" && (
+          <div>
+            <label className="text-xs text-white/40 mb-1 block">Query Param Name</label>
+            <input value={form.apiKeyParam} onChange={(e) => set({ apiKeyParam: e.target.value })}
+              placeholder="api_key"
+              className="w-full bg-white/10 border border-white/20 text-white text-sm rounded-lg px-3 py-2" />
+          </div>
+        )}
+        {form.authenticationType === "apiKeyHeader" && (
+          <div>
+            <label className="text-xs text-white/40 mb-1 block">Header Name</label>
+            <input value={form.apiKeyHeaderName} onChange={(e) => set({ apiKeyHeaderName: e.target.value })}
+              placeholder="X-API-Key"
+              className="w-full bg-white/10 border border-white/20 text-white text-sm rounded-lg px-3 py-2" />
+          </div>
+        )}
+        {form.authenticationType === "basicAuth" && (
+          <div>
+            <label className="text-xs text-white/40 mb-1 block">Basic Auth Username</label>
+            <input value={form.basicAuthUser} onChange={(e) => set({ basicAuthUser: e.target.value })}
+              placeholder="username"
+              className="w-full bg-white/10 border border-white/20 text-white text-sm rounded-lg px-3 py-2" />
+          </div>
+        )}
+        <div>
+          <label className="text-xs text-white/40 mb-1 block">Response Path</label>
+          <input value={form.responsePath} onChange={(e) => set({ responsePath: e.target.value })}
+            placeholder="offers"
+            className="w-full bg-white/10 border border-white/20 text-white text-sm rounded-lg px-3 py-2" />
+        </div>
+        <div>
+          <label className="text-xs text-white/40 mb-1 block">Request Method</label>
+          <select value={form.requestMethod} onChange={(e) => set({ requestMethod: e.target.value as "GET" | "POST" })}
+            className="w-full bg-white/10 border border-white/20 text-white text-sm rounded-lg px-3 py-2">
+            <option value="GET">GET</option>
+            <option value="POST">POST</option>
+          </select>
+        </div>
+      </div>
+
+      <div className="grid md:grid-cols-3 gap-3">
+        <div>
+          <label className="text-xs text-white/40 mb-1 block">Extra Query Params (key: value)</label>
+          <textarea rows={3} value={form.queryParamsRaw} onChange={(e) => set({ queryParamsRaw: e.target.value })}
+            placeholder={"limit: 50\ntype: 1"}
+            className="w-full bg-white/10 border border-white/20 text-white text-xs rounded-lg px-3 py-2 font-mono resize-none" />
+        </div>
+        <div>
+          <label className="text-xs text-white/40 mb-1 block">Custom Headers (key: value)</label>
+          <textarea rows={3} value={form.headersRaw} onChange={(e) => set({ headersRaw: e.target.value })}
+            placeholder={"X-App-ID: yourappid"}
+            className="w-full bg-white/10 border border-white/20 text-white text-xs rounded-lg px-3 py-2 font-mono resize-none" />
+        </div>
+        <div>
+          <label className="text-xs text-white/40 mb-1 block">Field Mapping (target: source)</label>
+          <textarea rows={3} value={form.offerMappingRaw} onChange={(e) => set({ offerMappingRaw: e.target.value })}
+            placeholder={"id: offer_id\ntitle: name\npayout: reward"}
+            className="w-full bg-white/10 border border-white/20 text-white text-xs rounded-lg px-3 py-2 font-mono resize-none" />
+        </div>
+      </div>
+
+      <div className="grid md:grid-cols-3 gap-3 items-center">
+        <div>
+          <label className="text-xs text-white/40 mb-1 block">Postback URL</label>
+          <input value={form.postbackUrl} onChange={(e) => set({ postbackUrl: e.target.value })}
+            placeholder="https://..."
+            className="w-full bg-white/10 border border-white/20 text-white text-sm rounded-lg px-3 py-2" />
+        </div>
+        <div>
+          <label className="text-xs text-white/40 mb-1 block">Auto-Import Interval (min)</label>
+          <input type="number" value={form.importInterval} onChange={(e) => set({ importInterval: parseInt(e.target.value) || 30 })}
+            className="w-full bg-white/10 border border-white/20 text-white text-sm rounded-lg px-3 py-2" />
+        </div>
+        <div className="flex items-center gap-4 pt-5">
+          <button onClick={() => set({ enabled: !form.enabled })}
+            className={`w-10 h-5 rounded-full transition-all relative shrink-0 ${form.enabled ? "bg-emerald-500" : "bg-white/20"}`}>
+            <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${form.enabled ? "right-0.5" : "left-0.5"}`} />
+          </button>
+          <span className="text-xs text-white/50">Enabled</span>
+          <button onClick={() => set({ autoImport: !form.autoImport })}
+            className={`w-10 h-5 rounded-full transition-all relative shrink-0 ${form.autoImport ? "bg-blue-500" : "bg-white/20"}`}>
+            <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${form.autoImport ? "right-0.5" : "left-0.5"}`} />
+          </button>
+          <span className="text-xs text-white/50">Auto-Import</span>
+        </div>
+      </div>
+
+      <div className="flex gap-2 pt-2">
+        <button onClick={() => onSave(form)} disabled={saving}
+          className="flex items-center gap-1 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-white text-xs font-medium px-4 py-2 rounded-lg transition-colors">
+          {saving ? "Saving..." : "Save Changes"}
+        </button>
+        <button onClick={onCancel}
+          className="text-xs text-white/50 hover:text-white px-4 py-2 rounded-lg transition-colors border border-white/10 hover:border-white/20">
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
 
 interface PostbackEvent {
   id: string;
@@ -101,9 +269,31 @@ type ManualTaskCompletion = {
 type ManagedPlatform = {
   id: string;
   name: string;
-  type: string;
+  displayName: string;
   enabled: boolean;
-  postbackUrl?: string;
+  apiBase: string;
+  endpoint: string;
+  authenticationType: "bearer" | "apiKeyHeader" | "queryParam" | "basicAuth";
+  apiKey: string;
+  apiKeyParam: string;
+  apiKeyHeaderName: string;
+  basicAuthUser: string;
+  requestMethod: "GET" | "POST";
+  headers: Record<string, string>;
+  queryParameters: Record<string, string>;
+  responsePath: string;
+  offerMapping: Record<string, string>;
+  postbackUrl: string;
+  autoImport: boolean;
+  importInterval: number;
+  rateLimit: number;
+  // Status fields (written by import API)
+  importStatus?: "success" | "error" | "idle";
+  lastImportAt?: string;
+  lastImportCount?: number;
+  totalOffersFound?: number;
+  lastImportDurationMs?: number;
+  lastError?: string;
   createdAt: Date;
 };
 
@@ -143,13 +333,33 @@ export default function AdminPage() {
   const [platforms, setPlatforms] = useState<ManagedPlatform[]>([]);
   const [loadingPlatforms, setLoadingPlatforms] = useState(false);
   const [savingPlatformId, setSavingPlatformId] = useState<string | null>(null);
-  const [newPlatform, setNewPlatform] = useState({
-    name: "",
-    type: "manual",
-    postbackUrl: "",
-    enabled: true,
-  });
+  const [testingPlatformId, setTestingPlatformId] = useState<string | null>(null);
+  const [importingPlatformId, setImportingPlatformId] = useState<string | null>(null);
+  const [deletingPlatformId, setDeletingPlatformId] = useState<string | null>(null);
+  const [showPlatformForm, setShowPlatformForm] = useState(false);
   const [editingPlatformId, setEditingPlatformId] = useState<string | null>(null);
+  const emptyPlatformForm = {
+    name: "",
+    displayName: "",
+    enabled: true,
+    apiBase: "",
+    endpoint: "",
+    authenticationType: "queryParam" as ManagedPlatform["authenticationType"],
+    apiKey: "",
+    apiKeyParam: "api_key",
+    apiKeyHeaderName: "X-API-Key",
+    basicAuthUser: "",
+    requestMethod: "GET" as ManagedPlatform["requestMethod"],
+    headersRaw: "",
+    queryParamsRaw: "",
+    responsePath: "offers",
+    offerMappingRaw: "",
+    postbackUrl: "",
+    autoImport: false,
+    importInterval: 30,
+    rateLimit: 60,
+  };
+  const [newPlatform, setNewPlatform] = useState(emptyPlatformForm);
 
   const [fetchingNetwork, setFetchingNetwork] = useState<string | null>(null);
   const [importedOffers, setImportedOffers] = useState<Record<string, unknown>[]>([]);
@@ -355,14 +565,41 @@ export default function AdminPage() {
     setLoadingPlatforms(true);
     try {
       const snap = await getDocs(collection(db, "platforms"));
-      const fetched: ManagedPlatform[] = snap.docs.map((d) => ({
-        id: d.id,
-        name: String(d.data().name || ""),
-        type: String(d.data().type || "platform"),
-        enabled: d.data().enabled !== false,
-        postbackUrl: d.data().postbackUrl ? String(d.data().postbackUrl) : undefined,
-        createdAt: (d.data().createdAt as Timestamp)?.toDate() || new Date(),
-      }));
+      const fetched: ManagedPlatform[] = snap.docs.map((d) => {
+        const data = d.data();
+        const sv = (k: string) => String(data[k] || "");
+        const nv = (k: string, def = 0) => Number(data[k] || def);
+        const bv = (k: string, def = true) => data[k] !== false && data[k] !== undefined ? (data[k] === false ? false : def) : def;
+        return {
+          id: d.id,
+          name: sv("name"),
+          displayName: sv("displayName") || sv("name"),
+          enabled: data.enabled !== false,
+          apiBase: sv("apiBase"),
+          endpoint: sv("endpoint"),
+          authenticationType: (sv("authenticationType") || "queryParam") as ManagedPlatform["authenticationType"],
+          apiKey: sv("apiKey"),
+          apiKeyParam: sv("apiKeyParam") || "api_key",
+          apiKeyHeaderName: sv("apiKeyHeaderName") || "X-API-Key",
+          basicAuthUser: sv("basicAuthUser"),
+          requestMethod: (sv("requestMethod") || "GET") as ManagedPlatform["requestMethod"],
+          headers: (data.headers as Record<string, string>) || {},
+          queryParameters: (data.queryParameters as Record<string, string>) || {},
+          responsePath: sv("responsePath") || "offers",
+          offerMapping: (data.offerMapping as Record<string, string>) || {},
+          postbackUrl: sv("postbackUrl"),
+          autoImport: bv("autoImport", false),
+          importInterval: nv("importInterval", 30),
+          rateLimit: nv("rateLimit", 60),
+          importStatus: data.importStatus as ManagedPlatform["importStatus"],
+          lastImportAt: sv("lastImportAt") || undefined,
+          lastImportCount: data.lastImportCount !== undefined ? Number(data.lastImportCount) : undefined,
+          totalOffersFound: data.totalOffersFound !== undefined ? Number(data.totalOffersFound) : undefined,
+          lastImportDurationMs: data.lastImportDurationMs !== undefined ? Number(data.lastImportDurationMs) : undefined,
+          lastError: sv("lastError") || undefined,
+          createdAt: (data.createdAt as Timestamp)?.toDate() || new Date(),
+        };
+      });
       fetched.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
       setPlatforms(fetched);
     } finally {
@@ -370,16 +607,50 @@ export default function AdminPage() {
     }
   }
 
-  // Auto-import: run on mount (when API keys are loaded) and every 30 minutes
+  function parsePlatformForm(form: typeof emptyPlatformForm) {
+    const parseKV = (raw: string): Record<string, string> => {
+      const result: Record<string, string> = {};
+      for (const line of raw.split("\n")) {
+        const colonIdx = line.indexOf(":");
+        if (colonIdx < 1) continue;
+        const k = line.slice(0, colonIdx).trim();
+        const v = line.slice(colonIdx + 1).trim();
+        if (k) result[k] = v;
+      }
+      return result;
+    };
+    return {
+      name: form.name.trim(),
+      displayName: form.displayName.trim() || form.name.trim(),
+      enabled: form.enabled,
+      apiBase: form.apiBase.trim(),
+      endpoint: form.endpoint.trim(),
+      authenticationType: form.authenticationType,
+      apiKey: form.apiKey.trim(),
+      apiKeyParam: form.apiKeyParam.trim() || "api_key",
+      apiKeyHeaderName: form.apiKeyHeaderName.trim() || "X-API-Key",
+      basicAuthUser: form.basicAuthUser.trim(),
+      requestMethod: form.requestMethod,
+      headers: parseKV(form.headersRaw),
+      queryParameters: parseKV(form.queryParamsRaw),
+      responsePath: form.responsePath.trim() || "offers",
+      offerMapping: parseKV(form.offerMappingRaw),
+      postbackUrl: form.postbackUrl.trim(),
+      autoImport: form.autoImport,
+      importInterval: Number(form.importInterval) || 30,
+      rateLimit: Number(form.rateLimit) || 60,
+    };
+  }
+
+  // Auto-import: run on mount and every 30 minutes using dynamic platforms from Firestore
   useEffect(() => {
     if (authLoading || !profile) return;
     if (profile.role !== "admin") return;
-    const hasKeys = networkKeys.adgemKey || networkKeys.lootablyKey || networkKeys.cpagripKey;
-    if (!hasKeys) return;
-    runAutoImport(networkKeys);
-    const interval = setInterval(() => runAutoImport(networkKeys), 30 * 60 * 1000);
+    runAutoImport();
+    const interval = setInterval(() => runAutoImport(), 30 * 60 * 1000);
     return () => clearInterval(interval);
-  }, [networkKeys]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile, authLoading]);
 
   // Countdown timer to next auto-import
   useEffect(() => {
@@ -565,42 +836,27 @@ export default function AdminPage() {
     }
   }
 
-  async function fetchOffersFromNetwork(networkId: string) {
-    const keyMap: Record<string, string | undefined> = {
-      adgem: networkKeys.adgemKey,
-      lootably: networkKeys.lootablyKey,
-      cpabuild: networkKeys.cpabuildKey,
-      monetizer: networkKeys.monetizerKey,
-      cpagrip: networkKeys.cpagripKey,
-    };
-    const apiKey = keyMap[networkId];
-    if (!apiKey) {
-      toast({ title: "No API Key", description: `Enter ${AD_NETWORKS.find(n => n.id === networkId)?.name} API key in Settings first`, variant: "destructive" });
-      return;
-    }
-    setFetchingNetwork(networkId);
+  async function fetchOffersFromNetwork(platformId: string) {
+    setFetchingNetwork(platformId);
     setImportedOffers([]);
     setSelectedImportOffers(new Set());
     try {
-      const network = AD_NETWORKS.find((n) => n.id === networkId)!;
-      let offers: Record<string, unknown>[] = [];
-    // كود عام لكل المنصات
-    const r = await fetch('/api/import-platform', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        platformName: networkId.toUpperCase(),
-        firebaseProjectId: 'green-task-orbit',
-        firebaseApiKey: import.meta.env.VITE_FIREBASE_API_KEY || 
-          'AIzaSyCYC0sGV6EjRA3q4fmhjxSQck2Y0Era_SM'
-      })
-    });
-    const d = await r.json();
-    offers = d.offers || [];
-
-      if (offers.length === 0) throw new Error("No offers returned. Check your API key.");
+      const r = await fetch("/api/import-platform", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          platformName: platformId,
+          firebaseProjectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "green-task-orbit",
+          firebaseApiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyCYC0sGV6EjRA3q4fmhjxSQck2Y0Era_SM",
+        }),
+      });
+      const d = await r.json() as { success?: boolean; offers?: Record<string, unknown>[]; error?: string };
+      if (!d.success) throw new Error(d.error || "No offers returned");
+      const offers = d.offers || [];
+      if (offers.length === 0) throw new Error("No offers returned. Check platform configuration.");
       setImportedOffers(offers);
       toast({ title: `✅ Found ${offers.length} offers` });
+      await fetchPlatforms();
     } catch (e: unknown) {
       toast({ title: "Fetch Failed", description: e instanceof Error ? e.message : "Network error", variant: "destructive" });
     } finally {
@@ -608,36 +864,43 @@ export default function AdminPage() {
     }
   }
 
-  async function importSelectedOffers(networkId: string) {
+  async function importSelectedOffers(platformId: string) {
     if (selectedImportOffers.size === 0) {
       toast({ title: "None selected", description: "Select at least one offer to import", variant: "destructive" });
       return;
     }
     setImportingOffers(true);
+    const platform = platforms.find((p) => p.id === platformId);
+    const platformName = platform?.displayName || platformId;
     try {
-      const network = AD_NETWORKS.find((n) => n.id === networkId)!;
       let imported = 0;
-      for (const idx of selectedImportOffers) {
+      const writes = Array.from(selectedImportOffers).map(async (idx) => {
         const offer = importedOffers[idx];
-        if (!offer) continue;
-        const title = (offer.name || offer.title || offer.offer_name || "Untitled Offer") as string;
+        if (!offer) return;
+        const title = String(offer.name || offer.title || offer.offer_name || "Untitled Offer");
         const payout = parseFloat(String(offer.payout || offer.reward || offer.amount || "0.005"));
-        const url = (offer.link || offer.url || offer.offer_url || "") as string;
-        const description = (offer.description || offer.requirements || "") as string;
-        const platform = network.name;
+        const url = String(offer.link || offer.url || offer.offer_url || "");
+        const description = String(offer.description || offer.requirements || "");
+        const offerId = String(offer.id || offer.offer_id || "");
         await addDoc(collection(db, "tasks"), {
-          title, description, url, platform,
-          reward: payout, type: payout >= 0.05 ? "premium" : "simple",
+          title, description, url,
+          platform: platformName,
+          platformId,
+          reward: payout,
+          type: payout >= 0.05 ? "premium" : "simple",
           taskType: "platform",
           status: "published",
           manualAdminRate: 0.35,
-          active: true, networkStatus: "pending",
-          importedFrom: networkId,
-          offerId: String(offer.id || offer.offer_id || ""),
+          active: true,
+          networkStatus: "pending",
+          importedFrom: platformId,
+          offerId,
+          externalId: offerId,
           createdAt: serverTimestamp(),
         });
         imported++;
-      }
+      });
+      await Promise.all(writes);
       await fetchTasks();
       setImportedOffers([]);
       setSelectedImportOffers(new Set());
@@ -870,90 +1133,65 @@ export default function AdminPage() {
     }
   }
 
-  async function runAutoImport(keys: NetworkKeys) {
-    const keyMap: Record<string, string | undefined> = {
-      adgem: keys.adgemKey,
-      lootably: keys.lootablyKey,
-      cpagrip: keys.cpagripKey,
-    };
-    const activeNetworks = AD_NETWORKS.filter((n) => !!keyMap[n.id]);
-    if (activeNetworks.length === 0) return;
+  async function runAutoImport() {
+    // Load enabled platforms with autoImport = true from Firestore
+    let autoSnap;
+    try {
+      autoSnap = await getDocs(collection(db, "platforms"));
+    } catch {
+      setAutoImportStatus("error");
+      setAutoImportLog(["❌ Could not load platforms from Firestore."]);
+      return;
+    }
+
+    const activePlatforms = autoSnap.docs.filter((d) => {
+      const data = d.data();
+      return data.enabled !== false && data.autoImport === true && data.apiBase;
+    });
+
+    if (activePlatforms.length === 0) {
+      setAutoImportStatus("idle");
+      return;
+    }
 
     setAutoImportStatus("running");
     const log: string[] = [];
+    let totalImported = 0;
 
-    try {
-      const existingSnap = await getDocs(collection(db, "tasks"));
-      const existingOfferIds = new Set(
-        existingSnap.docs.map((d) => String(d.data().offerId || "")).filter(Boolean)
-      );
+    const fbProjectId = import.meta.env.VITE_FIREBASE_PROJECT_ID || "green-task-orbit";
+    const fbApiKey    = import.meta.env.VITE_FIREBASE_API_KEY    || "AIzaSyCYC0sGV6EjRA3q4fmhjxSQck2Y0Era_SM";
 
-      let totalImported = 0;
-
-      for (const network of activeNetworks) {
-        try {
-          const apiKey = keyMap[network.id]!;
-          let offers: Record<string, unknown>[] = [];
-
-          if (network.id === "adgem") {
-            const r = await fetch(`${network.apiBase}?api_key=${apiKey}&limit=50`);
-            const d = await r.json() as { data?: Record<string, unknown>[] };
-            offers = d.data || [];
-          } else if (network.id === "lootably") {
-            const r = await fetch(`${network.apiBase}?token=${apiKey}&limit=50`);
-            const d = await r.json() as { offers?: Record<string, unknown>[] };
-            offers = d.offers || [];
-          } else if (network.id === "cpagrip") {
-            const r = await fetch(`${network.apiBase}?user_id=${apiKey}&type=1&output=json`);
-            const d = await r.json() as { offers?: Record<string, unknown>[] };
-            offers = d.offers || [];
-          }
-
-          const newOffers = offers.filter((o) => {
-            const oid = String(o.id || o.offer_id || "");
-            return oid && !existingOfferIds.has(oid);
-          });
-
-          for (const offer of newOffers) {
-            const title = String(offer.name || offer.title || offer.offer_name || "Untitled Offer");
-            const payout = parseFloat(String(offer.payout || offer.reward || offer.amount || "0.005"));
-            const url = String(offer.link || offer.url || offer.offer_url || "");
-            const description = String(offer.description || offer.requirements || "");
-            const offerId = String(offer.id || offer.offer_id || "");
-            await addDoc(collection(db, "tasks"), {
-              title, description, url,
-              platform: network.name,
-              reward: payout,
-              type: payout >= 0.05 ? "premium" : "simple",
-              taskType: "platform",
-              status: "published",
-              manualAdminRate: 0.35,
-              active: true,
-              networkStatus: "pending",
-              importedFrom: network.id,
-              offerId,
-              createdAt: serverTimestamp(),
-            });
-            existingOfferIds.add(offerId);
-            totalImported++;
-          }
-
-          log.push(`✅ ${network.name}: ${newOffers.length} new offer(s) imported`);
-        } catch {
-          log.push(`⚠ ${network.name}: fetch failed (check API key or CORS)`);
+    for (const platDoc of activePlatforms) {
+      const displayName = String(platDoc.data().displayName || platDoc.data().name || platDoc.id);
+      try {
+        const r = await fetch("/api/import-platform", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            platformName: platDoc.id,
+            firebaseProjectId: fbProjectId,
+            firebaseApiKey: fbApiKey,
+          }),
+        });
+        const d = await r.json() as { success?: boolean; imported?: number; error?: string };
+        if (d.success) {
+          log.push(`✅ ${displayName}: ${d.imported ?? 0} new offer(s) imported`);
+          totalImported += d.imported ?? 0;
+        } else {
+          log.push(`⚠ ${displayName}: ${d.error || "fetch failed"}`);
         }
+      } catch (e) {
+        log.push(`⚠ ${displayName}: ${e instanceof Error ? e.message : "network error"}`);
       }
-
-      if (totalImported > 0) await fetchTasks();
-      log.push(`Total: ${totalImported} new task(s) added at ${new Date().toLocaleTimeString("en-US")}`);
-      setAutoImportLog(log);
-      setLastAutoImport(new Date());
-      setNextImportCountdown(30 * 60);
-      setAutoImportStatus("completed");
-    } catch {
-      setAutoImportStatus("error");
-      setAutoImportLog(["❌ Auto-import failed. Check console for details."]);
     }
+
+    if (totalImported > 0) await fetchTasks();
+    log.push(`Total: ${totalImported} new task(s) added at ${new Date().toLocaleTimeString("en-US")}`);
+    setAutoImportLog(log);
+    setLastAutoImport(new Date());
+    setNextImportCountdown(30 * 60);
+    setAutoImportStatus(totalImported > 0 || log.every(l => l.startsWith("✅")) ? "completed" : "error");
+    await fetchPlatforms();
   }
 
   async function handleComparePlatformReport() {
@@ -1056,16 +1294,20 @@ export default function AdminPage() {
       toast({ title: "Missing name", description: "Platform name is required.", variant: "destructive" });
       return;
     }
+    if (!newPlatform.apiBase.trim()) {
+      toast({ title: "Missing API Base", description: "API Base URL is required.", variant: "destructive" });
+      return;
+    }
     setSavingPlatformId("new");
     try {
+      const data = parsePlatformForm(newPlatform);
       await addDoc(collection(db, "platforms"), {
-        name: newPlatform.name.trim(),
-        type: newPlatform.type.trim() || "manual",
-        enabled: newPlatform.enabled,
-        postbackUrl: newPlatform.postbackUrl.trim() || null,
+        ...data,
+        importStatus: "idle",
         createdAt: serverTimestamp(),
       });
-      setNewPlatform({ name: "", type: "manual", postbackUrl: "", enabled: true });
+      setNewPlatform(emptyPlatformForm);
+      setShowPlatformForm(false);
       await fetchPlatforms();
       toast({ title: "✅ Platform added" });
     } finally {
@@ -1073,14 +1315,12 @@ export default function AdminPage() {
     }
   }
 
-  async function handleSavePlatform(platform: ManagedPlatform) {
-    setSavingPlatformId(platform.id);
+  async function handleSavePlatform(platformId: string, form: typeof emptyPlatformForm) {
+    setSavingPlatformId(platformId);
     try {
-      await updateDoc(doc(db, "platforms", platform.id), {
-        name: platform.name.trim(),
-        type: platform.type.trim() || "manual",
-        enabled: platform.enabled,
-        postbackUrl: platform.postbackUrl?.trim() || null,
+      const data = parsePlatformForm(form);
+      await updateDoc(doc(db, "platforms", platformId), {
+        ...data,
         updatedAt: serverTimestamp(),
       });
       await fetchPlatforms();
@@ -1092,13 +1332,81 @@ export default function AdminPage() {
   }
 
   async function handleDeletePlatform(platformId: string) {
+    setDeletingPlatformId(null);
     setSavingPlatformId(platformId);
     try {
       await deleteDoc(doc(db, "platforms", platformId));
       await fetchPlatforms();
-      toast({ title: "Platform deleted" });
+      toast({ title: "Platform deleted", description: "Imported tasks and history preserved." });
     } finally {
       setSavingPlatformId(null);
+    }
+  }
+
+  async function handleTogglePlatform(platform: ManagedPlatform) {
+    setSavingPlatformId(platform.id);
+    try {
+      await updateDoc(doc(db, "platforms", platform.id), {
+        enabled: !platform.enabled,
+        updatedAt: serverTimestamp(),
+      });
+      await fetchPlatforms();
+      toast({ title: platform.enabled ? "Platform disabled" : "✅ Platform enabled" });
+    } finally {
+      setSavingPlatformId(null);
+    }
+  }
+
+  async function handleTestConnection(platform: ManagedPlatform) {
+    setTestingPlatformId(platform.id);
+    try {
+      const r = await fetch("/api/import-platform", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          platformName: platform.id,
+          firebaseProjectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "green-task-orbit",
+          firebaseApiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyCYC0sGV6EjRA3q4fmhjxSQck2Y0Era_SM",
+        }),
+      });
+      const data = await r.json() as { success?: boolean; error?: string; totalOffers?: number };
+      if (data.success) {
+        toast({ title: `✅ Connection OK — ${data.totalOffers ?? 0} offers found` });
+      } else {
+        toast({ title: "Connection Failed", description: data.error || "Unknown error", variant: "destructive" });
+      }
+      await fetchPlatforms();
+    } catch (e) {
+      toast({ title: "Test Failed", description: e instanceof Error ? e.message : "Network error", variant: "destructive" });
+    } finally {
+      setTestingPlatformId(null);
+    }
+  }
+
+  async function handleRunImport(platform: ManagedPlatform) {
+    setImportingPlatformId(platform.id);
+    try {
+      const r = await fetch("/api/import-platform", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          platformName: platform.id,
+          firebaseProjectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "green-task-orbit",
+          firebaseApiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyCYC0sGV6EjRA3q4fmhjxSQck2Y0Era_SM",
+        }),
+      });
+      const data = await r.json() as { success?: boolean; error?: string; imported?: number; skipped?: number; totalOffers?: number };
+      if (data.success) {
+        toast({ title: `✅ Imported ${data.imported} new task(s)`, description: `${data.skipped} duplicates skipped out of ${data.totalOffers} total offers.` });
+        await fetchTasks();
+      } else {
+        toast({ title: "Import Failed", description: data.error || "Unknown error", variant: "destructive" });
+      }
+      await fetchPlatforms();
+    } catch (e) {
+      toast({ title: "Import Error", description: e instanceof Error ? e.message : "Network error", variant: "destructive" });
+    } finally {
+      setImportingPlatformId(null);
     }
   }
 
@@ -2494,56 +2802,340 @@ export default function AdminPage() {
       {/* === PLATFORMS === */}
       {tab === "platforms" && (
         <div className="space-y-4">
-          <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
-            <h2 className="font-semibold text-white mb-4">Add Platform</h2>
-            <div className="grid md:grid-cols-4 gap-3">
-              <Input placeholder="Name" value={newPlatform.name} onChange={(e) => setNewPlatform({ ...newPlatform, name: e.target.value })} className="bg-white/10 border-white/20 text-white" />
-              <Input placeholder="Type (manual/platform)" value={newPlatform.type} onChange={(e) => setNewPlatform({ ...newPlatform, type: e.target.value })} className="bg-white/10 border-white/20 text-white" />
-              <Input placeholder="Postback URL (optional)" value={newPlatform.postbackUrl} onChange={(e) => setNewPlatform({ ...newPlatform, postbackUrl: e.target.value })} className="bg-white/10 border-white/20 text-white" />
-              <Button onClick={handleAddPlatform} disabled={savingPlatformId === "new"} className="bg-emerald-500 hover:bg-emerald-400 text-white">
-                {savingPlatformId === "new" ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <Plus className="w-4 h-4 mr-1" />}
-                Add Platform
-              </Button>
+
+          {/* Delete confirmation dialog */}
+          {deletingPlatformId && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+              <div className="bg-slate-900 border border-red-500/30 rounded-2xl p-6 w-full max-w-sm space-y-4 shadow-2xl">
+                <div className="flex items-center gap-3">
+                  <AlertTriangle className="w-6 h-6 text-red-400 shrink-0" />
+                  <div>
+                    <p className="font-semibold text-white">Delete Platform?</p>
+                    <p className="text-xs text-white/50 mt-1">All imported tasks will be preserved. This only removes the platform configuration and stops future imports.</p>
+                  </div>
+                </div>
+                <div className="flex gap-2 pt-1">
+                  <Button onClick={() => handleDeletePlatform(deletingPlatformId)} disabled={!!savingPlatformId}
+                    className="flex-1 bg-red-500 hover:bg-red-400 text-white rounded-xl">
+                    {savingPlatformId ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <Trash2 className="w-4 h-4 mr-1" />}
+                    Yes, Delete
+                  </Button>
+                  <Button variant="outline" onClick={() => setDeletingPlatformId(null)}
+                    className="flex-1 border-white/20 text-white/60 hover:text-white rounded-xl">Cancel</Button>
+                </div>
+              </div>
             </div>
+          )}
+
+          {/* Header + Add Button */}
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="font-semibold text-white">Ad Network Platforms</h2>
+              <p className="text-xs text-white/40 mt-0.5">Manage any advertising network without changing source code</p>
+            </div>
+            <Button onClick={() => { setShowPlatformForm(true); setEditingPlatformId(null); setNewPlatform(emptyPlatformForm); }}
+              className="bg-emerald-500 hover:bg-emerald-400 text-white rounded-xl">
+              <Plus className="w-4 h-4 mr-1" />Add Platform
+            </Button>
           </div>
 
+          {/* Add / Edit Platform Form */}
+          {showPlatformForm && (
+            <div className="bg-white/5 border border-emerald-500/20 rounded-2xl p-5 space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold text-white text-sm">New Platform Configuration</h3>
+                <button onClick={() => setShowPlatformForm(false)} className="text-white/40 hover:text-white text-xs">✕ Cancel</button>
+              </div>
+
+              <div className="grid md:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-white/50 mb-1 block">Platform ID (unique, no spaces) *</label>
+                  <Input placeholder="e.g. adgem, lootably, myadnetwork" value={newPlatform.name}
+                    onChange={(e) => setNewPlatform({ ...newPlatform, name: e.target.value.toLowerCase().replace(/\s+/g, "_") })}
+                    className="bg-white/10 border-white/20 text-white" />
+                </div>
+                <div>
+                  <label className="text-xs text-white/50 mb-1 block">Display Name</label>
+                  <Input placeholder="e.g. AdGem, Lootably" value={newPlatform.displayName}
+                    onChange={(e) => setNewPlatform({ ...newPlatform, displayName: e.target.value })}
+                    className="bg-white/10 border-white/20 text-white" />
+                </div>
+                <div>
+                  <label className="text-xs text-white/50 mb-1 block">API Base URL *</label>
+                  <Input placeholder="https://api.example.com/v1" value={newPlatform.apiBase}
+                    onChange={(e) => setNewPlatform({ ...newPlatform, apiBase: e.target.value })}
+                    className="bg-white/10 border-white/20 text-white" />
+                </div>
+                <div>
+                  <label className="text-xs text-white/50 mb-1 block">Endpoint Path</label>
+                  <Input placeholder="/offers (appended to API Base)" value={newPlatform.endpoint}
+                    onChange={(e) => setNewPlatform({ ...newPlatform, endpoint: e.target.value })}
+                    className="bg-white/10 border-white/20 text-white" />
+                </div>
+                <div>
+                  <label className="text-xs text-white/50 mb-1 block">Authentication Type</label>
+                  <select value={newPlatform.authenticationType}
+                    onChange={(e) => setNewPlatform({ ...newPlatform, authenticationType: e.target.value as ManagedPlatform["authenticationType"] })}
+                    className="w-full bg-white/10 border border-white/20 text-white text-sm rounded-lg px-3 py-2">
+                    <option value="queryParam">Query Parameter</option>
+                    <option value="bearer">Bearer Token</option>
+                    <option value="apiKeyHeader">API Key Header</option>
+                    <option value="basicAuth">Basic Auth</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-white/50 mb-1 block">API Key / Secret</label>
+                  <Input placeholder="Your API key or bearer token" value={newPlatform.apiKey}
+                    onChange={(e) => setNewPlatform({ ...newPlatform, apiKey: e.target.value })}
+                    className="bg-white/10 border-white/20 text-white font-mono text-sm" />
+                </div>
+                {newPlatform.authenticationType === "queryParam" && (
+                  <div>
+                    <label className="text-xs text-white/50 mb-1 block">Query Param Name for API Key</label>
+                    <Input placeholder="api_key" value={newPlatform.apiKeyParam}
+                      onChange={(e) => setNewPlatform({ ...newPlatform, apiKeyParam: e.target.value })}
+                      className="bg-white/10 border-white/20 text-white" />
+                  </div>
+                )}
+                {newPlatform.authenticationType === "apiKeyHeader" && (
+                  <div>
+                    <label className="text-xs text-white/50 mb-1 block">Header Name for API Key</label>
+                    <Input placeholder="X-API-Key" value={newPlatform.apiKeyHeaderName}
+                      onChange={(e) => setNewPlatform({ ...newPlatform, apiKeyHeaderName: e.target.value })}
+                      className="bg-white/10 border-white/20 text-white" />
+                  </div>
+                )}
+                {newPlatform.authenticationType === "basicAuth" && (
+                  <div>
+                    <label className="text-xs text-white/50 mb-1 block">Basic Auth Username</label>
+                    <Input placeholder="username" value={newPlatform.basicAuthUser}
+                      onChange={(e) => setNewPlatform({ ...newPlatform, basicAuthUser: e.target.value })}
+                      className="bg-white/10 border-white/20 text-white" />
+                  </div>
+                )}
+                <div>
+                  <label className="text-xs text-white/50 mb-1 block">Response Path (where offers array lives)</label>
+                  <Input placeholder="offers  or  data  or  results.items" value={newPlatform.responsePath}
+                    onChange={(e) => setNewPlatform({ ...newPlatform, responsePath: e.target.value })}
+                    className="bg-white/10 border-white/20 text-white" />
+                </div>
+                <div>
+                  <label className="text-xs text-white/50 mb-1 block">Request Method</label>
+                  <select value={newPlatform.requestMethod}
+                    onChange={(e) => setNewPlatform({ ...newPlatform, requestMethod: e.target.value as "GET" | "POST" })}
+                    className="w-full bg-white/10 border border-white/20 text-white text-sm rounded-lg px-3 py-2">
+                    <option value="GET">GET</option>
+                    <option value="POST">POST</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid md:grid-cols-3 gap-3">
+                <div>
+                  <label className="text-xs text-white/50 mb-1 block">Extra Query Params (key: value, one per line)</label>
+                  <textarea rows={3} placeholder={"limit: 50\ntype: 1\noutput: json"}
+                    value={newPlatform.queryParamsRaw}
+                    onChange={(e) => setNewPlatform({ ...newPlatform, queryParamsRaw: e.target.value })}
+                    className="w-full bg-white/10 border border-white/20 text-white text-xs rounded-lg px-3 py-2 font-mono resize-none" />
+                </div>
+                <div>
+                  <label className="text-xs text-white/50 mb-1 block">Custom Headers (key: value, one per line)</label>
+                  <textarea rows={3} placeholder={"X-App-ID: yourappid\nAccept: application/json"}
+                    value={newPlatform.headersRaw}
+                    onChange={(e) => setNewPlatform({ ...newPlatform, headersRaw: e.target.value })}
+                    className="w-full bg-white/10 border border-white/20 text-white text-xs rounded-lg px-3 py-2 font-mono resize-none" />
+                </div>
+                <div>
+                  <label className="text-xs text-white/50 mb-1 block">Field Mapping (targetField: sourceField)</label>
+                  <textarea rows={3} placeholder={"id: offer_id\ntitle: name\npayout: reward\nurl: link"}
+                    value={newPlatform.offerMappingRaw}
+                    onChange={(e) => setNewPlatform({ ...newPlatform, offerMappingRaw: e.target.value })}
+                    className="w-full bg-white/10 border border-white/20 text-white text-xs rounded-lg px-3 py-2 font-mono resize-none" />
+                </div>
+              </div>
+
+              <div className="grid md:grid-cols-3 gap-3">
+                <div>
+                  <label className="text-xs text-white/50 mb-1 block">Postback URL</label>
+                  <Input placeholder="https://..." value={newPlatform.postbackUrl}
+                    onChange={(e) => setNewPlatform({ ...newPlatform, postbackUrl: e.target.value })}
+                    className="bg-white/10 border-white/20 text-white text-sm" />
+                </div>
+                <div>
+                  <label className="text-xs text-white/50 mb-1 block">Auto-Import Interval (min)</label>
+                  <Input type="number" value={newPlatform.importInterval}
+                    onChange={(e) => setNewPlatform({ ...newPlatform, importInterval: parseInt(e.target.value) || 30 })}
+                    className="bg-white/10 border-white/20 text-white" />
+                </div>
+                <div className="flex items-center gap-3 pt-5">
+                  <button onClick={() => setNewPlatform({ ...newPlatform, enabled: !newPlatform.enabled })}
+                    className={cn("w-10 h-5 rounded-full transition-all relative shrink-0", newPlatform.enabled ? "bg-emerald-500" : "bg-white/20")}>
+                    <span className={cn("absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all", newPlatform.enabled ? "right-0.5" : "left-0.5")} />
+                  </button>
+                  <span className="text-xs text-white/60">Enabled</span>
+                  <button onClick={() => setNewPlatform({ ...newPlatform, autoImport: !newPlatform.autoImport })}
+                    className={cn("w-10 h-5 rounded-full transition-all relative shrink-0 ml-3", newPlatform.autoImport ? "bg-blue-500" : "bg-white/20")}>
+                    <span className={cn("absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all", newPlatform.autoImport ? "right-0.5" : "left-0.5")} />
+                  </button>
+                  <span className="text-xs text-white/60">Auto-Import</span>
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-2 border-t border-white/10">
+                <Button onClick={handleAddPlatform} disabled={savingPlatformId === "new"}
+                  className="bg-emerald-500 hover:bg-emerald-400 text-white rounded-xl">
+                  {savingPlatformId === "new" ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <Plus className="w-4 h-4 mr-1" />}
+                  Save Platform
+                </Button>
+                <Button variant="outline" onClick={() => setShowPlatformForm(false)}
+                  className="border-white/20 text-white/60 hover:text-white rounded-xl">Cancel</Button>
+              </div>
+            </div>
+          )}
+
+          {/* Platform List */}
           <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
-            <h2 className="font-semibold text-white mb-4">Platforms ({platforms.length})</h2>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-white">Platforms ({platforms.length})</h3>
+              <Button size="sm" variant="outline" onClick={fetchPlatforms} disabled={loadingPlatforms}
+                className="border-white/20 text-white/60 hover:text-white h-8">
+                <RefreshCw className={cn("w-3.5 h-3.5", loadingPlatforms && "animate-spin")} />
+              </Button>
+            </div>
             {loadingPlatforms ? (
               <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin text-emerald-400" /></div>
             ) : platforms.length === 0 ? (
-              <p className="text-white/40 text-center py-6 text-sm">No platforms yet</p>
+              <div className="text-center py-10 space-y-3">
+                <Zap className="w-8 h-8 text-white/15 mx-auto" />
+                <p className="text-white/40 text-sm">No platforms configured yet</p>
+                <Button size="sm" onClick={() => setShowPlatformForm(true)} className="bg-emerald-500 hover:bg-emerald-400 text-white rounded-xl">
+                  <Plus className="w-3.5 h-3.5 mr-1" />Add your first platform
+                </Button>
+              </div>
             ) : (
               <div className="space-y-3">
                 {platforms.map((p) => {
                   const isEditing = editingPlatformId === p.id;
+                  const isSaving  = savingPlatformId  === p.id;
+                  const isTesting  = testingPlatformId  === p.id;
+                  const isImporting = importingPlatformId === p.id;
+                  const statusCls = p.importStatus === "success" ? "text-emerald-400" : p.importStatus === "error" ? "text-red-400" : "text-white/30";
+                  const statusIcon = p.importStatus === "success" ? <CheckCircle className="w-3 h-3" /> : p.importStatus === "error" ? <AlertCircle className="w-3 h-3" /> : <Clock className="w-3 h-3" />;
+
                   return (
-                    <div key={p.id} className="rounded-xl border border-white/10 bg-white/5 p-4">
-                      <div className="grid md:grid-cols-4 gap-3">
-                        <Input value={p.name} disabled={!isEditing} onChange={(e) => setPlatforms((prev) => prev.map((x) => x.id === p.id ? { ...x, name: e.target.value } : x))} className="bg-white/10 border-white/20 text-white disabled:opacity-60" />
-                        <Input value={p.type} disabled={!isEditing} onChange={(e) => setPlatforms((prev) => prev.map((x) => x.id === p.id ? { ...x, type: e.target.value } : x))} className="bg-white/10 border-white/20 text-white disabled:opacity-60" />
-                        <Input value={p.postbackUrl || ""} disabled={!isEditing} onChange={(e) => setPlatforms((prev) => prev.map((x) => x.id === p.id ? { ...x, postbackUrl: e.target.value } : x))} className="bg-white/10 border-white/20 text-white disabled:opacity-60" />
-                        <div className="flex items-center gap-2">
-                          <button onClick={() => setPlatforms((prev) => prev.map((x) => x.id === p.id ? { ...x, enabled: !x.enabled } : x))} className={cn("w-10 h-5 rounded-full transition-all relative", p.enabled ? "bg-emerald-500" : "bg-white/20")}>
-                            <span className={cn("absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all", p.enabled ? "right-0.5" : "left-0.5")} />
-                          </button>
-                          <span className="text-xs text-white/60">{p.enabled ? "Enabled" : "Disabled"}</span>
+                    <div key={p.id} className={cn("rounded-xl border bg-white/5 p-4 space-y-3 transition-colors",
+                      p.enabled ? "border-white/10" : "border-white/5 opacity-60")}>
+
+                      {/* Platform header row */}
+                      <div className="flex items-start gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-semibold text-white text-sm">{p.displayName || p.name}</span>
+                            <span className="text-xs font-mono text-white/30 bg-white/5 px-1.5 py-0.5 rounded">{p.id}</span>
+                            <Badge className={cn("text-xs border", p.enabled ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30" : "bg-white/10 text-white/40 border-white/10")}>
+                              {p.enabled ? "Enabled" : "Disabled"}
+                            </Badge>
+                            {p.autoImport && (
+                              <Badge className="bg-blue-500/20 text-blue-300 border-blue-500/30 text-xs border">Auto-Import</Badge>
+                            )}
+                          </div>
+                          <p className="text-xs text-white/40 mt-0.5 truncate">{p.apiBase}{p.endpoint}</p>
+                        </div>
+                        <div className="shrink-0 text-right space-y-0.5">
+                          <div className={cn("flex items-center justify-end gap-1 text-xs", statusCls)}>
+                            {statusIcon}
+                            <span className="capitalize">{p.importStatus || "Never imported"}</span>
+                          </div>
+                          {p.lastImportAt && (
+                            <p className="text-xs text-white/25">Last: {new Date(p.lastImportAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</p>
+                          )}
                         </div>
                       </div>
-                      <div className="flex gap-2 mt-3 pt-3 border-t border-white/5">
-                        {!isEditing ? (
-                          <Button size="sm" variant="outline" onClick={() => setEditingPlatformId(p.id)} className="border-white/20 text-white/70">
-                            <Pencil className="w-3 h-3 mr-1" />Edit
-                          </Button>
-                        ) : (
-                          <Button size="sm" onClick={() => handleSavePlatform(p)} disabled={savingPlatformId === p.id} className="bg-emerald-500 hover:bg-emerald-400 text-white">
-                            {savingPlatformId === p.id ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Check className="w-3 h-3 mr-1" />}Save
-                          </Button>
-                        )}
-                        <Button size="sm" variant="outline" onClick={() => handleDeletePlatform(p.id)} disabled={savingPlatformId === p.id} className="border-red-500/30 text-red-400">
+
+                      {/* Stats row */}
+                      <div className="grid grid-cols-3 gap-2 text-xs">
+                        <div className="bg-white/5 rounded-lg px-2.5 py-1.5">
+                          <p className="text-white/30">Auth</p>
+                          <p className="text-white/70 font-medium capitalize">{p.authenticationType || "—"}</p>
+                        </div>
+                        <div className="bg-white/5 rounded-lg px-2.5 py-1.5">
+                          <p className="text-white/30">Last Imported</p>
+                          <p className="text-emerald-400 font-medium">{p.lastImportCount !== undefined ? `${p.lastImportCount} offers` : "—"}</p>
+                        </div>
+                        <div className="bg-white/5 rounded-lg px-2.5 py-1.5">
+                          <p className="text-white/30">Duration</p>
+                          <p className="text-white/70 font-medium">{p.lastImportDurationMs !== undefined ? `${(p.lastImportDurationMs / 1000).toFixed(1)}s` : "—"}</p>
+                        </div>
+                      </div>
+
+                      {/* Error display */}
+                      {p.lastError && (
+                        <div className="bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 flex items-start gap-2">
+                          <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />
+                          <p className="text-xs text-red-400/80 break-all">{p.lastError}</p>
+                        </div>
+                      )}
+
+                      {/* Action buttons */}
+                      <div className="flex gap-1.5 pt-1 border-t border-white/5 flex-wrap">
+                        <Button size="sm" onClick={() => handleTestConnection(p)} disabled={isTesting || isImporting || isSaving}
+                          variant="outline" className="border-blue-500/30 text-blue-300 hover:bg-blue-500/10 h-7 text-xs rounded-lg">
+                          {isTesting ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Zap className="w-3 h-3 mr-1" />}
+                          Test Connection
+                        </Button>
+                        <Button size="sm" onClick={() => handleRunImport(p)} disabled={isTesting || isImporting || isSaving || !p.enabled}
+                          variant="outline" className="border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/10 h-7 text-xs rounded-lg">
+                          {isImporting ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Download className="w-3 h-3 mr-1" />}
+                          Import Now
+                        </Button>
+                        <Button size="sm" onClick={() => handleTogglePlatform(p)} disabled={isSaving}
+                          variant="outline" className={cn("h-7 text-xs rounded-lg border", p.enabled ? "border-amber-500/30 text-amber-300 hover:bg-amber-500/10" : "border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/10")}>
+                          {isSaving ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : null}
+                          {p.enabled ? "Disable" : "Enable"}
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={() => setEditingPlatformId(isEditing ? null : p.id)}
+                          className="border-white/20 text-white/60 hover:text-white h-7 text-xs rounded-lg">
+                          <Pencil className="w-3 h-3 mr-1" />{isEditing ? "Cancel Edit" : "Edit"}
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={() => setDeletingPlatformId(p.id)}
+                          className="border-red-500/20 text-red-400/70 hover:text-red-300 hover:bg-red-500/10 h-7 text-xs rounded-lg ml-auto">
                           <Trash2 className="w-3 h-3 mr-1" />Delete
                         </Button>
                       </div>
+
+                      {/* Inline edit form */}
+                      {isEditing && (() => {
+                        const editForm = {
+                          name: p.name,
+                          displayName: p.displayName,
+                          enabled: p.enabled,
+                          apiBase: p.apiBase,
+                          endpoint: p.endpoint,
+                          authenticationType: p.authenticationType,
+                          apiKey: p.apiKey,
+                          apiKeyParam: p.apiKeyParam,
+                          apiKeyHeaderName: p.apiKeyHeaderName,
+                          basicAuthUser: p.basicAuthUser,
+                          requestMethod: p.requestMethod,
+                          headersRaw: Object.entries(p.headers || {}).map(([k, v]) => `${k}: ${v}`).join("\n"),
+                          queryParamsRaw: Object.entries(p.queryParameters || {}).map(([k, v]) => `${k}: ${v}`).join("\n"),
+                          responsePath: p.responsePath,
+                          offerMappingRaw: Object.entries(p.offerMapping || {}).map(([k, v]) => `${k}: ${v}`).join("\n"),
+                          postbackUrl: p.postbackUrl,
+                          autoImport: p.autoImport,
+                          importInterval: p.importInterval,
+                          rateLimit: p.rateLimit,
+                        };
+                        return (
+                          <PlatformEditForm
+                            key={p.id}
+                            initialForm={editForm}
+                            saving={isSaving}
+                            onSave={(form) => handleSavePlatform(p.id, form)}
+                            onCancel={() => setEditingPlatformId(null)}
+                          />
+                        );
+                      })()}
                     </div>
                   );
                 })}
@@ -2559,36 +3151,34 @@ export default function AdminPage() {
 
           {/* Auto-Import Status */}
           <div className={cn("rounded-2xl p-4 border flex items-start gap-3",
-            autoImportStatus === "running" ? "bg-blue-500/10 border-blue-500/20"
+            autoImportStatus === "running"   ? "bg-blue-500/10 border-blue-500/20"
             : autoImportStatus === "completed" ? "bg-emerald-500/10 border-emerald-500/20"
-            : autoImportStatus === "error" ? "bg-red-500/10 border-red-500/20"
+            : autoImportStatus === "error"     ? "bg-red-500/10 border-red-500/20"
             : "bg-white/5 border-white/10")}>
             <div className="shrink-0 mt-0.5">
-              {autoImportStatus === "running" ? <Loader2 className="w-5 h-5 text-blue-400 animate-spin" />
+              {autoImportStatus === "running"   ? <Loader2 className="w-5 h-5 text-blue-400 animate-spin" />
               : autoImportStatus === "completed" ? <CheckCircle className="w-5 h-5 text-emerald-400" />
-              : autoImportStatus === "error" ? <AlertTriangle className="w-5 h-5 text-red-400" />
+              : autoImportStatus === "error"     ? <AlertTriangle className="w-5 h-5 text-red-400" />
               : <RefreshCw className="w-5 h-5 text-white/30" />}
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between gap-3">
                 <p className={cn("font-medium text-sm",
-                  autoImportStatus === "running" ? "text-blue-300"
+                  autoImportStatus === "running"   ? "text-blue-300"
                   : autoImportStatus === "completed" ? "text-emerald-300"
-                  : autoImportStatus === "error" ? "text-red-300"
+                  : autoImportStatus === "error"     ? "text-red-300"
                   : "text-white/50")}>
-                  {autoImportStatus === "running" ? "Auto-Import Running..."
+                  {autoImportStatus === "running"   ? "Auto-Import Running..."
                   : autoImportStatus === "completed" ? "Auto-Import Completed"
-                  : autoImportStatus === "error" ? "Auto-Import Error"
-                  : "Auto-Import: Idle (add API keys in Settings to enable)"}
+                  : autoImportStatus === "error"     ? "Auto-Import Error"
+                  : "Auto-Import: Idle (enable Auto-Import on platforms to activate)"}
                 </p>
                 <div className="flex items-center gap-2 shrink-0">
-                  {autoImportStatus !== "idle" && (
-                    <Button size="sm" variant="outline" onClick={() => runAutoImport(networkKeys)}
-                      disabled={autoImportStatus === "running"}
-                      className="border-white/20 text-white/60 hover:text-white text-xs h-7">
-                      Run Now
-                    </Button>
-                  )}
+                  <Button size="sm" variant="outline" onClick={() => runAutoImport()}
+                    disabled={autoImportStatus === "running"}
+                    className="border-white/20 text-white/60 hover:text-white text-xs h-7">
+                    <RefreshCw className="w-3 h-3 mr-1" />Run Now
+                  </Button>
                 </div>
               </div>
               {lastAutoImport && (
@@ -2612,85 +3202,101 @@ export default function AdminPage() {
             <div>
               <p className="text-blue-300 font-medium text-sm">How it works</p>
               <p className="text-blue-400/70 text-xs mt-1">
-                Enter API keys in the Settings tab, then click "Fetch Offers" for a network. Select the offers you want to import as tasks.
-                Auto-import runs every 30 minutes in the background, skipping offers already in the system.
-                Due to browser CORS restrictions, some networks must be integrated via their postback/webhook URL instead.
+                Add platforms in the Platforms tab with your API configuration. Click "Fetch Offers" to preview offers and select which ones to import as tasks.
+                Enable "Auto-Import" on a platform to have it import automatically every 30 minutes. Duplicate detection uses externalId — already-imported offers are skipped.
               </p>
             </div>
           </div>
 
           <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
             <h2 className="font-semibold text-white mb-2 flex items-center gap-2"><Link2 className="w-4 h-4 text-emerald-400" />Your Postback URL</h2>
-            <p className="text-xs text-white/40 mb-3">Use this URL in each ad network's postback settings. Replace <span className="text-emerald-400 font-mono">USER_ID</span> and <span className="text-emerald-400 font-mono">TASK_ID</span> with the network's macros.</p>
+            <p className="text-xs text-white/40 mb-3">Use this URL in each ad network's postback settings. Replace macros with the network's variable syntax.</p>
             <div className="bg-slate-900 border border-white/10 rounded-xl p-3 font-mono text-xs text-emerald-300 break-all">
-              {postbackBaseUrl}?network=NETWORK_NAME&user_id=USER_ID&task_id=TASK_ID&status=approved&amount=PAYOUT&secret={postbackSecret || "YOUR_SECRET"}
+              {postbackBaseUrl}?network=NETWORK_ID&user_id=USER_ID&task_id=TASK_ID&status=approved&amount=PAYOUT&secret={postbackSecret || "YOUR_SECRET"}
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-3">
-              {AD_NETWORKS.map((n) => (
-                <div key={n.id} className="bg-white/5 border border-white/10 rounded-lg p-2 text-xs">
-                  <p className="font-medium text-white">{n.name}</p>
-                  <p className="text-white/40 mt-0.5">network={n.id}</p>
-                </div>
-              ))}
-            </div>
+            {platforms.length > 0 && (
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-3">
+                {platforms.filter(p => p.enabled).map((p) => (
+                  <div key={p.id} className="bg-white/5 border border-white/10 rounded-lg p-2 text-xs">
+                    <p className="font-medium text-white">{p.displayName || p.name}</p>
+                    <p className="text-white/40 mt-0.5 font-mono">network={p.id}</p>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
-          {AD_NETWORKS.map((network) => (
-            <div key={network.id} className="bg-white/5 border border-white/10 rounded-2xl p-5">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h3 className="font-semibold text-white flex items-center gap-2">
-                    <Zap className="w-4 h-4 text-amber-400" />{network.name}
-                  </h3>
-                  <p className="text-xs text-white/40">{network.url}</p>
+          {/* Platform offer fetch cards — dynamic from Firestore */}
+          {platforms.length === 0 ? (
+            <div className="bg-white/3 border border-white/8 rounded-2xl py-12 text-center space-y-3">
+              <Zap className="w-8 h-8 text-white/15 mx-auto" />
+              <p className="text-white/40 text-sm">No platforms configured</p>
+              <p className="text-white/25 text-xs">Add a platform in the Platforms tab to start importing offers</p>
+              <Button size="sm" onClick={() => setTab("platforms")} variant="outline"
+                className="border-white/20 text-white/60 hover:text-white rounded-xl">
+                Go to Platforms
+              </Button>
+            </div>
+          ) : (
+            platforms.filter(p => p.enabled && p.apiBase).map((platform) => (
+              <div key={platform.id} className="bg-white/5 border border-white/10 rounded-2xl p-5">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h3 className="font-semibold text-white flex items-center gap-2">
+                      <Zap className="w-4 h-4 text-amber-400" />
+                      {platform.displayName || platform.name}
+                    </h3>
+                    <p className="text-xs text-white/40 font-mono mt-0.5">{platform.apiBase}</p>
+                  </div>
+                  <Button size="sm" onClick={() => fetchOffersFromNetwork(platform.id)}
+                    disabled={fetchingNetwork === platform.id}
+                    className="bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 border border-blue-500/30 rounded-xl" variant="outline">
+                    {fetchingNetwork === platform.id ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <Download className="w-4 h-4 mr-1" />}
+                    Fetch Offers
+                  </Button>
                 </div>
-                <Button size="sm" onClick={() => fetchOffersFromNetwork(network.id)}
-                  disabled={fetchingNetwork === network.id}
-                  className="bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 border border-blue-500/30 rounded-xl" variant="outline">
-                  {fetchingNetwork === network.id ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <Download className="w-4 h-4 mr-1" />}
-                  Fetch Offers
-                </Button>
-              </div>
 
-              {importedOffers.length > 0 && fetchingNetwork !== network.id && (
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <p className="text-sm text-white/60">{importedOffers.length} offers found — select to import</p>
-                    <div className="flex gap-2">
-                      <Button size="sm" variant="outline" onClick={() => setSelectedImportOffers(new Set(importedOffers.map((_, i) => i)))}
-                        className="border-white/20 text-white/60 hover:text-white text-xs h-7">Select All</Button>
-                      <Button size="sm" onClick={() => importSelectedOffers(network.id)} disabled={importingOffers || selectedImportOffers.size === 0}
-                        className="bg-emerald-500 hover:bg-emerald-400 text-white text-xs h-7 rounded-lg">
-                        {importingOffers ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Download className="w-3 h-3 mr-1" />}
-                        Import ({selectedImportOffers.size})
-                      </Button>
+                {importedOffers.length > 0 && fetchingNetwork !== platform.id && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm text-white/60">{importedOffers.length} offers found — select to import</p>
+                      <div className="flex gap-2">
+                        <Button size="sm" variant="outline" onClick={() => setSelectedImportOffers(new Set(importedOffers.map((_, i) => i)))}
+                          className="border-white/20 text-white/60 hover:text-white text-xs h-7">Select All</Button>
+                        <Button size="sm" onClick={() => importSelectedOffers(platform.id)} disabled={importingOffers || selectedImportOffers.size === 0}
+                          className="bg-emerald-500 hover:bg-emerald-400 text-white text-xs h-7 rounded-lg">
+                          {importingOffers ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Download className="w-3 h-3 mr-1" />}
+                          Import ({selectedImportOffers.size})
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="space-y-2 max-h-80 overflow-y-auto">
+                      {importedOffers.map((offer, idx) => (
+                        <label key={idx} className={cn("flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all",
+                          selectedImportOffers.has(idx) ? "border-emerald-500/40 bg-emerald-500/10" : "border-white/5 hover:border-white/10")}>
+                          <input type="checkbox" checked={selectedImportOffers.has(idx)}
+                            onChange={(e) => {
+                              const s = new Set(selectedImportOffers);
+                              e.target.checked ? s.add(idx) : s.delete(idx);
+                              setSelectedImportOffers(s);
+                            }}
+                            className="w-4 h-4 accent-emerald-500" />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-white truncate">{String(offer.name || offer.title || offer.offer_name || "Unknown")}</p>
+                            <p className="text-xs text-white/40">{String(offer.description || offer.requirements || "").slice(0, 80)}</p>
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <p className="text-sm font-bold text-emerald-400">{formatCurrency(parseFloat(String(offer.payout || offer.reward || "0")))}</p>
+                            <p className="text-xs text-white/30">payout</p>
+                          </div>
+                        </label>
+                      ))}
                     </div>
                   </div>
-                  <div className="space-y-2 max-h-80 overflow-y-auto">
-                    {importedOffers.map((offer, idx) => (
-                      <label key={idx} className={cn("flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all", selectedImportOffers.has(idx) ? "border-emerald-500/40 bg-emerald-500/10" : "border-white/5 hover:border-white/10")}>
-                        <input type="checkbox" checked={selectedImportOffers.has(idx)}
-                          onChange={(e) => {
-                            const s = new Set(selectedImportOffers);
-                            e.target.checked ? s.add(idx) : s.delete(idx);
-                            setSelectedImportOffers(s);
-                          }}
-                          className="w-4 h-4 accent-emerald-500" />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-white truncate">{String(offer.name || offer.title || offer.offer_name || "Unknown")}</p>
-                          <p className="text-xs text-white/40">{String(offer.description || offer.requirements || "").slice(0, 80)}</p>
-                        </div>
-                        <div className="shrink-0 text-right">
-                          <p className="text-sm font-bold text-emerald-400">{formatCurrency(parseFloat(String(offer.payout || offer.reward || "0")))}</p>
-                          <p className="text-xs text-white/30">payout</p>
-                        </div>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          ))}
+                )}
+              </div>
+            ))
+          )}
         </div>
       )}
 
@@ -3198,23 +3804,13 @@ export default function AdminPage() {
             </div>
           </div>
 
-          <div className="bg-white/5 border border-white/10 rounded-2xl p-6">
-            <h2 className="font-semibold text-white mb-5 flex items-center gap-2"><Zap className="w-4 h-4 text-amber-400" />Ad Network API Keys</h2>
-            <div className="space-y-4">
-              {AD_NETWORKS.map((n) => {
-                const keyField = `${n.id}Key` as keyof NetworkKeys;
-                return (
-                  <div key={n.id}>
-                    <label className="text-sm font-medium text-white/80 block mb-1">{n.name} API Key</label>
-                    <Input
-                      value={networkKeys[keyField] || ""}
-                      onChange={(e) => setNetworkKeys({ ...networkKeys, [keyField]: e.target.value })}
-                      placeholder={`${n.name} API key`}
-                      className="bg-white/10 border-white/20 text-white font-mono text-sm"
-                    />
-                  </div>
-                );
-              })}
+          <div className="bg-blue-500/10 border border-blue-500/20 rounded-2xl p-4 flex gap-3">
+            <AlertCircle className="w-5 h-5 text-blue-400 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-blue-300 font-medium text-sm">Platform API Keys</p>
+              <p className="text-blue-400/70 text-xs mt-1">
+                API keys are now managed per-platform in the <strong>Platforms</strong> tab. Each platform has its own API key stored securely in Firestore — no more hardcoded keys in Settings. Go to the Platforms tab to add or edit platform configurations.
+              </p>
             </div>
           </div>
 

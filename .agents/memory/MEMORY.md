@@ -1,0 +1,1 @@
+- [Dynamic Platform Architecture](platform-architecture.md) — platforms managed entirely from Admin Panel via Firestore; import API is platform-agnostic; no hardcoded network logic anywhere.
