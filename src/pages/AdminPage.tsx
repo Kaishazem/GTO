@@ -23,7 +23,6 @@ import {
 import { db } from "@/lib/firebase";
 import { Task } from "@/contexts/TaskContext";
 import { getSettings, saveSettings, NetworkKeys } from "@/lib/settings";
-import { settleTaskCompletion } from "@/lib/taskSettlement";
 import { settleTaskCompletion as settleWalletCompletion } from "@/lib/walletSettlement";
 import { isManualCompletion } from "@/lib/taskType";
 import {
@@ -517,7 +516,7 @@ export default function AdminPage() {
       try {
         const snap = await getDoc(doc(db, "settings", "general"));
         if (snap.exists()) {
-          const d = snap.data() as any;
+          const d = snap.data() as { dashboardWarningEnabled?: boolean; dashboardWarningMessage?: string };
           setDashboardWarningEnabled(Boolean(d.dashboardWarningEnabled));
           setDashboardWarningMessage(String(d.dashboardWarningMessage || ""));
         }
@@ -531,9 +530,10 @@ export default function AdminPage() {
         const now = Date.now();
         let active = 0;
         usersSnap.docs.forEach((ud) => {
-          const data = ud.data() as any;
-          const registeredAt = data.registeredAt?.toDate?.() || (data.registeredAt ? new Date(data.registeredAt) : null);
-          const lastActive = data.lastActive?.toDate?.() || (data.lastActive ? new Date(data.lastActive) : null) || (data.lastLogin?.toDate?.() || null);
+          const data = ud.data() as { registeredAt?: Timestamp | string; lastActive?: Timestamp | string; lastLogin?: Timestamp | string };
+          const registeredAt = data.registeredAt instanceof Timestamp ? data.registeredAt.toDate() : data.registeredAt ? new Date(data.registeredAt) : null;
+          const lastActiveRaw = data.lastActive ?? data.lastLogin;
+          const lastActive = lastActiveRaw instanceof Timestamp ? lastActiveRaw.toDate() : lastActiveRaw ? new Date(lastActiveRaw) : null;
           if (lastActive) {
             if (now - lastActive.getTime() <= 7 * 24 * 60 * 60 * 1000) active++;
           } else if (registeredAt) {

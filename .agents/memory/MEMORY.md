@@ -1,1 +1,3 @@
 - [Dynamic Platform Architecture](platform-architecture.md) — platforms managed entirely from Admin Panel via Firestore; import API is platform-agnostic; no hardcoded network logic anywhere.
+- [Reconciliation taskType Bug](reconciliation-tasktype-fix.md) — `comparePlatformReport` had a `|| "platform"` default that misclassified manual tasks; fixed to use verifiedBy inference.
+- [Settlement Architecture](settlement-architecture.md) — single settlement path: always use `settleWalletCompletion` (alias of walletSettlement.settleTaskCompletion); taskSettlement.ts is a wrapper for postback flow only.

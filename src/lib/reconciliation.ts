@@ -310,7 +310,16 @@ export async function comparePlatformReport(
   // Manual tasks do not appear in platform reports and must not be treated as missing.
   const ourApproved: Record<string, { userId: string; taskId: string; reward: number }> = {};
   completionsSnap.docs.forEach((d) => {
-    const taskType = (d.data().taskType as string) || "platform";
+    // Use the same inference logic as fetchGlobalReconciliation:
+    // explicit taskType wins; otherwise use verifiedBy as a signal.
+    // Defaulting to "manual" when both are absent prevents manual tasks
+    // without a taskType field from appearing as platform mismatches.
+    const explicitType3 = d.data().taskType as string | undefined;
+    const hasVerifiedBy3 = !!d.data().verifiedBy;
+    const taskType: "manual" | "platform" =
+      explicitType3 === "manual" || explicitType3 === "platform"
+        ? (explicitType3 as "manual" | "platform")
+        : hasVerifiedBy3 ? "platform" : "manual";
     if (d.data().status === "approved" && taskType === "platform") {
       const key = `${d.data().userId as string}:${d.data().taskId as string}`;
       ourApproved[key] = {

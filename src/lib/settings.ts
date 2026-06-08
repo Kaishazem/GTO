@@ -2,11 +2,6 @@ import { doc, getDoc, setDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 
 export interface NetworkKeys {
-  adgemKey?: string;
-  lootablyKey?: string;
-  cpabuildKey?: string;
-  monetizerKey?: string;
-  cpagripKey?: string;
   postbackSecret?: string;
 }
 
