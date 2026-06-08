@@ -1,0 +1,272 @@
+Refactor the entire platform management system into a fully dynamic and scalable architecture.
+
+IMPORTANT:
+
+This project already contains working fixes for:
+
+- withdrawals
+- reconciliation
+- manual task earnings
+- withdrawal approval
+- wallet settlement
+
+DO NOT modify these systems.
+
+Your task is ONLY to redesign the platform management and importing architecture while preserving all existing business logic.
+
+Goal
+
+The admin must be able to manage ANY advertising network entirely from the Admin Panel without changing the source code.
+
+The system should support unlimited future platforms.
+
+---
+
+Part 1 — Dynamic Platform Management
+
+Replace the current platform configuration with a fully dynamic management system.
+
+The admin should be able to:
+
+✅ Add Platform
+
+✅ Edit Platform
+
+✅ Delete Platform
+
+✅ Enable / Disable Platform
+
+✅ Test Connection
+
+✅ Run Manual Import
+
+✅ View Last Import Status
+
+✅ View Last Error
+
+✅ View Imported Offers Count
+
+Deleting a platform should:
+
+- remove it from the platform list
+- stop scheduled imports
+- never delete imported tasks automatically
+- never affect wallet, withdrawals or reconciliation
+
+Disabling a platform should:
+
+- stop automatic imports
+- preserve all imported tasks
+- preserve reporting history
+
+---
+
+Part 2 — Generic Platform Configuration
+
+Each platform document should contain generic configuration instead of platform-specific fields.
+
+Example configuration:
+
+- platformName
+- displayName
+- enabled
+- apiBase
+- endpoint
+- authenticationType
+- apiKey
+- headers
+- queryParameters
+- requestMethod
+- responsePath
+- offerMapping
+- pagination
+- rateLimit
+- postbackConfiguration
+- autoImport
+- importInterval
+- status
+
+Remove platform-specific fields such as:
+
+- adgemApiKey
+- adgemAppId
+- lootablyKey
+
+Replace them with generic configuration.
+
+---
+
+Part 3 — Universal Import Architecture
+
+Completely refactor api/import-platform.js.
+
+Requirements:
+
+There must be NO:
+
+if(platform==="adgem")
+
+if(platform==="lootably")
+
+switch(platform)
+
+The importer must become platform-agnostic.
+
+Read everything dynamically from Firestore.
+
+Support:
+
+- Bearer Token
+- API Key Header
+- Query Parameter Authentication
+- Basic Authentication
+- Custom Headers
+
+Support different API response structures dynamically.
+
+Examples:
+
+offers
+
+data
+
+results
+
+campaigns
+
+items
+
+Support configurable mapping for:
+
+- id
+- title
+- description
+- payout
+- url
+- image
+- countries
+- devices
+- category
+
+without modifying code.
+
+---
+
+Part 4 — Firestore
+
+Improve Firestore performance.
+
+Avoid sequential writes.
+
+Use batching or Promise.all where appropriate.
+
+Keep duplicate detection using externalId.
+
+Use the proper Firestore API.
+
+Never duplicate platform secrets inside task documents.
+
+Secrets must remain only inside platform documents.
+
+---
+
+Part 5 — Admin Experience
+
+The Admin Panel should provide:
+
+Platform List
+
+Status
+
+Connection Status
+
+Last Import Time
+
+Imported Offers
+
+Import Errors
+
+Import Duration
+
+Buttons:
+
+Add
+
+Edit
+
+Delete
+
+Test Connection
+
+Import Now
+
+Enable
+
+Disable
+
+Show confirmation dialog before deleting a platform.
+
+---
+
+Part 6 — Compatibility
+
+Keep frontend compatibility.
+
+The existing frontend should continue calling:
+
+POST /api/import-platform
+
+The API should continue returning:
+
+{
+success,
+imported,
+skipped,
+totalOffers,
+offers
+}
+
+Do not break existing task documents unless absolutely necessary.
+
+---
+
+Part 7 — Safety
+
+Do NOT modify:
+
+- withdrawals
+- reconciliation
+- wallet settlement
+- revenue
+- reporting
+
+unless a real bug is found.
+
+---
+
+Part 8 — Validation
+
+Run:
+
+npm run build
+
+Fix all TypeScript issues.
+
+Verify Vercel compatibility.
+
+---
+
+Final Report
+
+At the end provide a complete report describing:
+
+- architecture improvements
+- scalability improvements
+- performance improvements
+- security improvements
+- UI improvements
+- Firestore improvements
+- import improvements
+- future extensibility
+
+The final result should allow adding any future advertising platform from the Admin Panel without modifying source code.
