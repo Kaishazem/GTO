@@ -20,7 +20,7 @@ import {
   collection, addDoc, getDocs, updateDoc, doc, deleteDoc, setDoc,
   serverTimestamp, Timestamp, increment, getDoc, query, where
 } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { db, auth } from "@/lib/firebase";
 import { Task } from "@/contexts/TaskContext";
 import { getSettings, saveSettings, NetworkKeys } from "@/lib/settings";
 import { settleTaskCompletion as settleWalletCompletion } from "@/lib/walletSettlement";
@@ -615,7 +615,9 @@ export default function AdminPage() {
           apiBase: sv("apiBase"),
           endpoint: sv("endpoint"),
           authenticationType: (sv("authenticationType") || "queryParam") as ManagedPlatform["authenticationType"],
-          apiKey: sv("apiKey"),
+          // Legacy field fallback: pre-populate apiKey from old per-network field names
+          // so the platform edit form shows the key even before the admin re-saves.
+          apiKey: sv("apiKey") || sv("adgemApiKey") || sv("lootablyApiKey") || sv("cpabuildApiKey") || sv("monetizerApiKey") || sv("cpagripApiKey"),
           apiKeyParam: sv("apiKeyParam") || "api_key",
           apiKeyHeaderName: sv("apiKeyHeaderName") || "X-API-Key",
           basicAuthUser: sv("basicAuthUser"),
@@ -843,11 +845,19 @@ export default function AdminPage() {
   // Keep as alias for legacy tab-switch wiring
   const fetchPostbacks = fetchConversions;
 
+  // Get the current admin's Firebase ID token so server-side handlers can make
+  // authenticated Firestore REST calls (respecting isSignedIn / isAdmin rules).
+  async function getAdminIdToken(): Promise<string> {
+    try { return (await auth.currentUser?.getIdToken()) ?? ""; }
+    catch { return ""; }
+  }
+
   async function fetchOffersFromNetwork(platformId: string) {
     setFetchingNetwork(platformId);
     setImportedOffers([]);
     setSelectedImportOffers(new Set());
     try {
+      const firebaseIdToken = await getAdminIdToken();
       const r = await fetch("/api/import-platform", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -855,6 +865,7 @@ export default function AdminPage() {
           platformName: platformId,
           firebaseProjectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "green-task-orbit",
           firebaseApiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyCYC0sGV6EjRA3q4fmhjxSQck2Y0Era_SM",
+          firebaseIdToken,
         }),
       });
       const d = await r.json() as { success?: boolean; offers?: Record<string, unknown>[]; error?: string };
@@ -1165,8 +1176,9 @@ export default function AdminPage() {
     const log: string[] = [];
     let totalImported = 0;
 
-    const fbProjectId = import.meta.env.VITE_FIREBASE_PROJECT_ID || "green-task-orbit";
-    const fbApiKey    = import.meta.env.VITE_FIREBASE_API_KEY    || "AIzaSyCYC0sGV6EjRA3q4fmhjxSQck2Y0Era_SM";
+    const fbProjectId     = import.meta.env.VITE_FIREBASE_PROJECT_ID || "green-task-orbit";
+    const fbApiKey        = import.meta.env.VITE_FIREBASE_API_KEY    || "AIzaSyCYC0sGV6EjRA3q4fmhjxSQck2Y0Era_SM";
+    const firebaseIdToken = await getAdminIdToken();
 
     for (const platDoc of activePlatforms) {
       const displayName = String(platDoc.data().displayName || platDoc.data().name || platDoc.id);
@@ -1178,6 +1190,7 @@ export default function AdminPage() {
             platformName: platDoc.id,
             firebaseProjectId: fbProjectId,
             firebaseApiKey: fbApiKey,
+            firebaseIdToken,
           }),
         });
         const d = await r.json() as { success?: boolean; imported?: number; error?: string };
@@ -1367,6 +1380,7 @@ export default function AdminPage() {
   async function handleTestConnection(platform: ManagedPlatform) {
     setTestingPlatformId(platform.id);
     try {
+      const firebaseIdToken = await getAdminIdToken();
       const r = await fetch("/api/import-platform", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1374,6 +1388,7 @@ export default function AdminPage() {
           platformName: platform.id,
           firebaseProjectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "green-task-orbit",
           firebaseApiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyCYC0sGV6EjRA3q4fmhjxSQck2Y0Era_SM",
+          firebaseIdToken,
         }),
       });
       const data = await r.json() as { success?: boolean; error?: string; totalOffers?: number };
@@ -1393,6 +1408,7 @@ export default function AdminPage() {
   async function handleRunImport(platform: ManagedPlatform) {
     setImportingPlatformId(platform.id);
     try {
+      const firebaseIdToken = await getAdminIdToken();
       const r = await fetch("/api/import-platform", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1400,6 +1416,7 @@ export default function AdminPage() {
           platformName: platform.id,
           firebaseProjectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "green-task-orbit",
           firebaseApiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyCYC0sGV6EjRA3q4fmhjxSQck2Y0Era_SM",
+          firebaseIdToken,
         }),
       });
       const data = await r.json() as { success?: boolean; error?: string; imported?: number; skipped?: number; totalOffers?: number };

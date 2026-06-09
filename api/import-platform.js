@@ -13,7 +13,7 @@ export default async function handler(req, res) {
   const startTime = Date.now();
 
   try {
-    const { platformName, firebaseProjectId, firebaseApiKey } = req.body;
+    const { platformName, firebaseProjectId, firebaseApiKey, firebaseIdToken } = req.body;
 
     if (!platformName || !firebaseProjectId || !firebaseApiKey) {
       return res.status(400).json({ error: 'Missing required parameters: platformName, firebaseProjectId, firebaseApiKey' });
@@ -22,11 +22,26 @@ export default async function handler(req, res) {
     const fsBase = `https://firestore.googleapis.com/v1/projects/${firebaseProjectId}/databases/(default)/documents`;
     const key = `?key=${firebaseApiKey}`;
 
-    // ── 1. Load platform document from Firestore ──────────────────────────────
-    const platformRes = await fetch(`${fsBase}/platforms/${platformName}${key}`);
-    const platformDoc = await platformRes.json();
+    // When the admin's Firebase ID token is supplied, attach it to all Firestore
+    // REST calls so security rules evaluate the request as that signed-in admin
+    // (isSignedIn() → true, isAdmin() → true). Without it the REST calls are
+    // unauthenticated and would be rejected by the existing rules.
+    const authHeaders = firebaseIdToken
+      ? { Authorization: `Bearer ${firebaseIdToken}` }
+      : {};
 
-    if (!platformDoc.fields) {
+    // ── 1. Load platform document from Firestore ──────────────────────────────
+    // Try the exact platformName first, then uppercase/lowercase variants so
+    // that a document stored as "ADGEM" is found even when "adgem" is passed.
+    let platformDoc;
+    let resolvedId = platformName; // the document ID that was actually found
+    for (const attempt of [platformName, platformName.toUpperCase(), platformName.toLowerCase()]) {
+      const res2 = await fetch(`${fsBase}/platforms/${attempt}${key}`, { headers: authHeaders });
+      const doc  = await res2.json();
+      if (doc.fields) { platformDoc = doc; resolvedId = attempt; break; }
+    }
+
+    if (!platformDoc || !platformDoc.fields) {
       return res.status(404).json({ error: `Platform '${platformName}' not found in Firestore` });
     }
 
@@ -59,19 +74,19 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Platform is disabled' });
     }
 
-    const apiBase            = fv(f.apiBase)          || '';
-    const endpoint           = fv(f.endpoint)         || '';
-    const apiKey             = fv(f.apiKey)            || '';
-    const authenticationType = fv(f.authenticationType) || 'queryParam';
-    const apiKeyParam        = fv(f.apiKeyParam)       || 'api_key';
-    const apiKeyHeaderName   = fv(f.apiKeyHeaderName)  || 'X-API-Key';
-    const basicAuthUser      = fv(f.basicAuthUser)     || '';
-    const requestMethod      = (fv(f.requestMethod)    || 'GET').toUpperCase();
-    const customHeaders      = fvMap(f.headers);
-    const queryParameters    = fvMap(f.queryParameters);
-    const responsePath       = fv(f.responsePath)      || 'offers';
-    const offerMapping       = fvMap(f.offerMapping);
-    const displayName        = fv(f.displayName)       || platformName;
+    let apiBase            = fv(f.apiBase)          || '';
+    let endpoint           = fv(f.endpoint)         || '';
+    let apiKey             = fv(f.apiKey)            || '';
+    let authenticationType = fv(f.authenticationType) || 'queryParam';
+    const apiKeyParam      = fv(f.apiKeyParam)       || 'api_key';
+    const apiKeyHeaderName = fv(f.apiKeyHeaderName)  || 'X-API-Key';
+    const basicAuthUser    = fv(f.basicAuthUser)     || '';
+    const requestMethod    = (fv(f.requestMethod)    || 'GET').toUpperCase();
+    const customHeaders    = fvMap(f.headers);
+    const queryParameters  = fvMap(f.queryParameters);
+    let responsePath       = fv(f.responsePath)      || 'offers';
+    const offerMapping     = fvMap(f.offerMapping);
+    const displayName      = fv(f.displayName)       || platformName;
 
     // Pagination sub-config
     const pag              = f.pagination?.mapValue?.fields || {};
@@ -79,8 +94,38 @@ export default async function handler(req, res) {
     const pagLimitParam    = fv(pag.limitParam)  || 'limit';
     const pagLimit         = Number(fv(pag.limit) || 50) || 50;
 
+    // ── 2a. Legacy field fallback ─────────────────────────────────────────────
+    // If the document uses the old per-network field names, derive the generic
+    // config from them so the universal handler can still call the API.
+    // This runs transparently — no platform-specific branches in the main flow.
+    let legacyAutoMigrate = null; // fields to write back so future runs skip this
+
     if (!apiBase) {
-      return res.status(400).json({ error: 'Missing apiBase in platform configuration' });
+      // AdGem legacy format: adgemApiKey (Bearer) + adgemAppId (app_id query param)
+      const adgemKey   = fv(f.adgemApiKey);
+      const adgemAppId = fv(f.adgemAppId);
+      if (adgemKey && adgemAppId) {
+        apiBase            = 'https://api.adgem.com/v1';
+        endpoint           = '/offers';
+        apiKey             = adgemKey;
+        authenticationType = 'bearer';
+        responsePath       = 'offers';
+        queryParameters['app_id'] = String(adgemAppId);
+        legacyAutoMigrate = {
+          apiBase: 'https://api.adgem.com/v1',
+          endpoint: '/offers',
+          authenticationType: 'bearer',
+          responsePath: 'offers',
+          apiKey: adgemKey,
+          displayName: fv(f.displayName) || 'AdGem',
+          name: fv(f.name) || 'AdGem',
+        };
+        console.log(`[import-platform] Using AdGem legacy config for '${resolvedId}'`);
+      }
+    }
+
+    if (!apiBase) {
+      return res.status(400).json({ error: 'Missing apiBase in platform configuration. Open the platform editor and set API Base URL.' });
     }
 
     // ── 3. Build request URL ──────────────────────────────────────────────────
@@ -137,14 +182,14 @@ export default async function handler(req, res) {
       apiResponse = await fetch(fullUrl.toString(), { method: requestMethod, headers });
     } catch (networkErr) {
       const msg = `Network error reaching ${apiBase}: ${networkErr.message}`;
-      await updatePlatformStatus(fsBase, platformName, key, { importStatus: 'error', lastError: msg, lastImportAt: new Date().toISOString() });
+      await updatePlatformStatus(fsBase, resolvedId, key, authHeaders, { importStatus: 'error', lastError: msg, lastImportAt: new Date().toISOString() });
       return res.status(502).json({ error: msg });
     }
 
     if (!apiResponse.ok) {
       const body = await apiResponse.text();
       const msg  = `Platform API returned ${apiResponse.status}: ${body.slice(0, 300)}`;
-      await updatePlatformStatus(fsBase, platformName, key, { importStatus: 'error', lastError: msg, lastImportAt: new Date().toISOString() });
+      await updatePlatformStatus(fsBase, resolvedId, key, authHeaders, { importStatus: 'error', lastError: msg, lastImportAt: new Date().toISOString() });
       return res.status(502).json({ error: msg });
     }
 
@@ -153,7 +198,7 @@ export default async function handler(req, res) {
       rawData = await apiResponse.json();
     } catch {
       const msg = 'Platform API returned non-JSON response';
-      await updatePlatformStatus(fsBase, platformName, key, { importStatus: 'error', lastError: msg, lastImportAt: new Date().toISOString() });
+      await updatePlatformStatus(fsBase, resolvedId, key, authHeaders, { importStatus: 'error', lastError: msg, lastImportAt: new Date().toISOString() });
       return res.status(502).json({ error: msg });
     }
 
@@ -181,7 +226,7 @@ export default async function handler(req, res) {
     }
 
     // ── 7. Fetch existing externalIds to detect duplicates ────────────────────
-    const existingSnap = await fetch(`${fsBase}/tasks${key}&pageSize=2000`).then(r => r.json());
+    const existingSnap = await fetch(`${fsBase}/tasks${key}&pageSize=2000`, { headers: authHeaders }).then(r => r.json());
     const existingIds  = new Set();
     if (Array.isArray(existingSnap.documents)) {
       for (const d of existingSnap.documents) {
@@ -241,11 +286,11 @@ export default async function handler(req, res) {
       const results = await Promise.all(
         chunk.map(item => fetch(`${fsBase}/tasks${key}`, {
           method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...authHeaders },
           body:    JSON.stringify({
             fields: {
               platform:       { stringValue: displayName },
-              platformId:     { stringValue: platformName },
+              platformId:     { stringValue: resolvedId },
               title:          { stringValue: item.title },
               description:    { stringValue: item.description },
               reward:         { doubleValue: item.payout },
@@ -253,14 +298,14 @@ export default async function handler(req, res) {
               url:            { stringValue: item.url },
               externalId:     { stringValue: item.externalId },
               offerId:        { stringValue: item.externalId },
-              network:        { stringValue: platformName },
+              network:        { stringValue: resolvedId },
               status:         { stringValue: 'published' },
               taskType:       { stringValue: 'platform' },
               type:           { stringValue: item.payout >= 0.05 ? 'premium' : 'simple' },
               active:         { booleanValue: true },
               networkStatus:  { stringValue: 'pending' },
               manualAdminRate:{ doubleValue: 0.35 },
-              importedFrom:   { stringValue: platformName },
+              importedFrom:   { stringValue: resolvedId },
               createdAt:      { stringValue: new Date().toISOString() },
             }
           }),
@@ -273,13 +318,15 @@ export default async function handler(req, res) {
     const skipped  = offers.length - toImport.length;
 
     // ── 10. Update platform import status in Firestore ────────────────────────
-    await updatePlatformStatus(fsBase, platformName, key, {
+    // Also write any migrated generic fields derived from legacy format.
+    await updatePlatformStatus(fsBase, resolvedId, key, authHeaders, {
       importStatus:         'success',
       lastError:            null,
       lastImportAt:         new Date().toISOString(),
       lastImportCount:      imported,
       totalOffersFound:     offers.length,
       lastImportDurationMs: duration,
+      ...(legacyAutoMigrate || {}),
     });
 
     return res.status(200).json({
@@ -298,7 +345,7 @@ export default async function handler(req, res) {
 }
 
 // ── Firestore PATCH helper (field-level update, no full document overwrite) ──
-async function updatePlatformStatus(fsBase, platformName, key, statusFields) {
+async function updatePlatformStatus(fsBase, platformName, key, authHeaders, statusFields) {
   try {
     const fieldPaths = Object.keys(statusFields)
       .map(k => `updateMask.fieldPaths=${encodeURIComponent(k)}`)
@@ -321,7 +368,7 @@ async function updatePlatformStatus(fsBase, platformName, key, statusFields) {
 
     await fetch(`${fsBase}/platforms/${platformName}${key}&${fieldPaths}`, {
       method:  'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
       body:    JSON.stringify({ fields }),
     });
   } catch (e) {

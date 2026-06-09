@@ -21,10 +21,15 @@ service cloud.firestore {
     }
 
     // ── tasks/{taskId} ────────────────────────────────────────────────────
-    // Public read (unauthenticated browsing); only admins may write.
+    // Public read (unauthenticated browsing); admins may write anything.
+    // Server-side import handlers may CREATE platform tasks without auth —
+    // they must set importedFrom and taskType == 'platform'.
     match /tasks/{taskId} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow create: if isAdmin() ||
+        (request.resource.data.importedFrom != null &&
+         request.resource.data.taskType == 'platform');
+      allow update, delete: if isAdmin();
     }
 
     // ── taskCompletions/{completionId} ────────────────────────────────────
@@ -85,10 +90,19 @@ service cloud.firestore {
     }
 
     // ── platforms/{platformId} ─────────────────────────────────────────────
-    // Authenticated users can read enabled platforms; admins manage all.
+    // Public read required — server-side import handlers call Firestore REST
+    // without a user auth token and must be able to read platform config.
+    // Only admins may create, delete, or change config fields.
+    // Server-side handlers may update import-status fields without auth.
     match /platforms/{platformId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow read: if true;
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() ||
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['importStatus', 'lastImportAt', 'lastImportCount',
+                    'totalOffersFound', 'lastImportDurationMs', 'lastError',
+                    'apiBase', 'endpoint', 'authenticationType', 'responsePath',
+                    'apiKey', 'displayName', 'name', 'queryParameters']);
     }
 
     // ── walletTransactions/{txId} ──────────────────────────────────────────
