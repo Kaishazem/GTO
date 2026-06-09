@@ -848,8 +848,15 @@ export default function AdminPage() {
   // Get the current admin's Firebase ID token so server-side handlers can make
   // authenticated Firestore REST calls (respecting isSignedIn / isAdmin rules).
   async function getAdminIdToken(): Promise<string> {
-    try { return (await auth.currentUser?.getIdToken()) ?? ""; }
-    catch { return ""; }
+    console.log("[DIAG][1] getAdminIdToken called. auth.currentUser=", auth.currentUser?.uid ?? "null");
+    try {
+      const token = (await auth.currentUser?.getIdToken()) ?? "";
+      console.log("[DIAG][1] getIdToken result: length=", token.length, "first40=", token.slice(0, 40));
+      return token;
+    } catch (e) {
+      console.error("[DIAG][1] getIdToken FAILED:", e);
+      return "";
+    }
   }
 
   async function fetchOffersFromNetwork(platformId: string) {
@@ -1380,16 +1387,25 @@ export default function AdminPage() {
   async function handleTestConnection(platform: ManagedPlatform) {
     setTestingPlatformId(platform.id);
     try {
+      console.log("[DIAG][2] handleTestConnection — platform.id=", platform.id);
       const firebaseIdToken = await getAdminIdToken();
+      const requestBody = {
+        platformName: platform.id,
+        firebaseProjectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "green-task-orbit",
+        firebaseApiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyCYC0sGV6EjRA3q4fmhjxSQck2Y0Era_SM",
+        firebaseIdToken,
+      };
+      console.log("[DIAG][2] Sending request body:", {
+        platformName: requestBody.platformName,
+        firebaseProjectId: requestBody.firebaseProjectId,
+        hasApiKey: !!requestBody.firebaseApiKey,
+        hasIdToken: !!firebaseIdToken,
+        idTokenLength: firebaseIdToken.length,
+      });
       const r = await fetch("/api/import-platform", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          platformName: platform.id,
-          firebaseProjectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "green-task-orbit",
-          firebaseApiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyCYC0sGV6EjRA3q4fmhjxSQck2Y0Era_SM",
-          firebaseIdToken,
-        }),
+        body: JSON.stringify(requestBody),
       });
       const data = await r.json() as { success?: boolean; error?: string; totalOffers?: number };
       if (data.success) {

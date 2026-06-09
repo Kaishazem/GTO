@@ -11,37 +11,70 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const startTime = Date.now();
+  const DIAG = (stage, status, detail) =>
+    console.log(`[import-platform] STAGE ${stage} ${status} | ${detail}`);
+
+  DIAG('0', 'START', `handler invoked at ${new Date().toISOString()}`);
 
   try {
     const { platformName, firebaseProjectId, firebaseApiKey, firebaseIdToken } = req.body;
 
+    // ── STAGE 1: Request body ─────────────────────────────────────────────────
+    DIAG('1', 'REQUEST_BODY', JSON.stringify({
+      platformName,
+      firebaseProjectId,
+      hasApiKey: !!firebaseApiKey,
+      hasIdToken: !!firebaseIdToken,
+      idTokenLength: firebaseIdToken ? firebaseIdToken.length : 0,
+    }));
+
     if (!platformName || !firebaseProjectId || !firebaseApiKey) {
+      DIAG('1', 'FAILED', 'Missing required parameters');
       return res.status(400).json({ error: 'Missing required parameters: platformName, firebaseProjectId, firebaseApiKey' });
     }
 
     const fsBase = `https://firestore.googleapis.com/v1/projects/${firebaseProjectId}/databases/(default)/documents`;
     const key = `?key=${firebaseApiKey}`;
 
-    // When the admin's Firebase ID token is supplied, attach it to all Firestore
-    // REST calls so security rules evaluate the request as that signed-in admin
-    // (isSignedIn() → true, isAdmin() → true). Without it the REST calls are
-    // unauthenticated and would be rejected by the existing rules.
     const authHeaders = firebaseIdToken
       ? { Authorization: `Bearer ${firebaseIdToken}` }
       : {};
 
-    // ── 1. Load platform document from Firestore ──────────────────────────────
-    // Try the exact platformName first, then uppercase/lowercase variants so
-    // that a document stored as "ADGEM" is found even when "adgem" is passed.
+    DIAG('1', 'AUTH', `Firestore auth mode: ${firebaseIdToken ? 'ID_TOKEN (authenticated)' : 'UNAUTHENTICATED (no token)'}`);
+
+    // ── STAGE 2: Firestore platform lookup ────────────────────────────────────
+    DIAG('2', 'START', `Looking up platform. Will try: ["${platformName}", "${platformName.toUpperCase()}", "${platformName.toLowerCase()}"]`);
+
     let platformDoc;
-    let resolvedId = platformName; // the document ID that was actually found
+    let resolvedId = platformName;
+
     for (const attempt of [platformName, platformName.toUpperCase(), platformName.toLowerCase()]) {
-      const res2 = await fetch(`${fsBase}/platforms/${attempt}${key}`, { headers: authHeaders });
-      const doc  = await res2.json();
-      if (doc.fields) { platformDoc = doc; resolvedId = attempt; break; }
+      const lookupUrl = `${fsBase}/platforms/${attempt}${key}`;
+      DIAG('2', 'ATTEMPT', `GET ${lookupUrl.replace(firebaseApiKey, '***')}`);
+
+      let res2, rawText, doc;
+      try {
+        res2 = await fetch(lookupUrl, { headers: authHeaders });
+        rawText = await res2.text();
+        DIAG('2', 'HTTP', `Status=${res2.status} attempt="${attempt}" body_prefix=${rawText.slice(0, 200)}`);
+        doc = JSON.parse(rawText);
+      } catch (e) {
+        DIAG('2', 'NETWORK_ERROR', `attempt="${attempt}" error=${e.message}`);
+        continue;
+      }
+
+      if (doc.fields) {
+        platformDoc = doc;
+        resolvedId = attempt;
+        DIAG('2', 'FOUND', `Document found at ID="${attempt}". Fields: ${Object.keys(doc.fields).join(', ')}`);
+        break;
+      } else {
+        DIAG('2', 'NOT_FOUND', `attempt="${attempt}" — no .fields in response. error=${doc.error?.message || 'none'} code=${doc.error?.code || 'n/a'}`);
+      }
     }
 
     if (!platformDoc || !platformDoc.fields) {
+      DIAG('2', 'FAILED', `Platform '${platformName}' not found after all attempts`);
       return res.status(404).json({ error: `Platform '${platformName}' not found in Firestore` });
     }
 
@@ -68,9 +101,10 @@ export default async function handler(req, res) {
       return result;
     };
 
-    // ── 2. Read generic config ────────────────────────────────────────────────
+    // ── STAGE 3: Read generic config ──────────────────────────────────────────
     const enabled = fv(f.enabled) !== false;
     if (!enabled) {
+      DIAG('3', 'FAILED', 'Platform is disabled (enabled=false)');
       return res.status(400).json({ error: 'Platform is disabled' });
     }
 
@@ -88,20 +122,31 @@ export default async function handler(req, res) {
     const offerMapping     = fvMap(f.offerMapping);
     const displayName      = fv(f.displayName)       || platformName;
 
+    DIAG('3', 'CONFIG_RAW', JSON.stringify({
+      enabled,
+      apiBase: apiBase || '(empty)',
+      endpoint: endpoint || '(empty)',
+      hasApiKey: !!apiKey,
+      authenticationType,
+      requestMethod,
+      responsePath,
+      displayName,
+      queryParameterKeys: Object.keys(queryParameters),
+      allDocFields: Object.keys(f),
+    }));
+
     // Pagination sub-config
     const pag              = f.pagination?.mapValue?.fields || {};
     const pagEnabled       = fv(pag.enabled)    || false;
     const pagLimitParam    = fv(pag.limitParam)  || 'limit';
     const pagLimit         = Number(fv(pag.limit) || 50) || 50;
 
-    // ── 2a. Legacy field fallback ─────────────────────────────────────────────
-    // If the document uses the old per-network field names, derive the generic
-    // config from them so the universal handler can still call the API.
-    // This runs transparently — no platform-specific branches in the main flow.
-    let legacyAutoMigrate = null; // fields to write back so future runs skip this
+    // ── STAGE 4: Legacy field fallback ────────────────────────────────────────
+    let legacyAutoMigrate = null;
 
     if (!apiBase) {
-      // AdGem legacy format: adgemApiKey (Bearer) + adgemAppId (app_id query param)
+      DIAG('4', 'LEGACY_CHECK', `apiBase empty — checking legacy fields. adgemApiKey present=${!!fv(f.adgemApiKey)}, adgemAppId present=${!!fv(f.adgemAppId)}`);
+
       const adgemKey   = fv(f.adgemApiKey);
       const adgemAppId = fv(f.adgemAppId);
       if (adgemKey && adgemAppId) {
@@ -120,35 +165,38 @@ export default async function handler(req, res) {
           displayName: fv(f.displayName) || 'AdGem',
           name: fv(f.name) || 'AdGem',
         };
-        console.log(`[import-platform] Using AdGem legacy config for '${resolvedId}'`);
+        DIAG('4', 'LEGACY_ADGEM', `AdGem legacy config applied. appId=${adgemAppId} keyLength=${adgemKey.length}`);
+      } else {
+        DIAG('4', 'LEGACY_NONE', 'No recognised legacy fields found');
       }
+    } else {
+      DIAG('4', 'SKIP', 'apiBase already set — no legacy fallback needed');
     }
 
     if (!apiBase) {
+      DIAG('4', 'FAILED', 'apiBase is still empty after legacy check');
       return res.status(400).json({ error: 'Missing apiBase in platform configuration. Open the platform editor and set API Base URL.' });
     }
 
-    // ── 3. Build request URL ──────────────────────────────────────────────────
+    // ── STAGE 5: Build and execute external API request ───────────────────────
     let fullUrl;
     try {
       fullUrl = new URL(`${apiBase}${endpoint}`);
     } catch {
+      DIAG('5', 'FAILED', `Invalid URL: ${apiBase}${endpoint}`);
       return res.status(400).json({ error: `Invalid apiBase URL: ${apiBase}${endpoint}` });
     }
 
-    // Static query parameters from config
     for (const [k, v] of Object.entries(queryParameters)) {
       if (v !== null && v !== undefined && v !== '') {
         fullUrl.searchParams.set(k, String(v));
       }
     }
 
-    // Pagination
     if (pagEnabled) {
       fullUrl.searchParams.set(pagLimitParam, String(pagLimit));
     }
 
-    // ── 4. Build request headers and apply authentication ─────────────────────
     const headers = {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
@@ -159,36 +207,40 @@ export default async function handler(req, res) {
       case 'bearer':
         headers['Authorization'] = `Bearer ${apiKey}`;
         break;
-
       case 'apiKeyHeader':
         headers[apiKeyHeaderName] = apiKey;
         break;
-
       case 'basicAuth': {
         const encoded = Buffer.from(`${basicAuthUser}:${apiKey}`).toString('base64');
         headers['Authorization'] = `Basic ${encoded}`;
         break;
       }
-
       case 'queryParam':
       default:
         fullUrl.searchParams.set(apiKeyParam, apiKey);
         break;
     }
 
-    // ── 5. Fetch offers from the platform API ─────────────────────────────────
+    // Log URL with key masked
+    const logUrl = fullUrl.toString().replace(apiKey, '***KEY***');
+    DIAG('5', 'API_REQUEST', `${requestMethod} ${logUrl} auth=${authenticationType}`);
+
     let apiResponse;
     try {
       apiResponse = await fetch(fullUrl.toString(), { method: requestMethod, headers });
     } catch (networkErr) {
       const msg = `Network error reaching ${apiBase}: ${networkErr.message}`;
+      DIAG('5', 'NETWORK_ERROR', msg);
       await updatePlatformStatus(fsBase, resolvedId, key, authHeaders, { importStatus: 'error', lastError: msg, lastImportAt: new Date().toISOString() });
       return res.status(502).json({ error: msg });
     }
 
+    DIAG('5', 'API_RESPONSE', `HTTP ${apiResponse.status} ${apiResponse.statusText}`);
+
     if (!apiResponse.ok) {
       const body = await apiResponse.text();
       const msg  = `Platform API returned ${apiResponse.status}: ${body.slice(0, 300)}`;
+      DIAG('5', 'FAILED', msg);
       await updatePlatformStatus(fsBase, resolvedId, key, authHeaders, { importStatus: 'error', lastError: msg, lastImportAt: new Date().toISOString() });
       return res.status(502).json({ error: msg });
     }
@@ -198,12 +250,14 @@ export default async function handler(req, res) {
       rawData = await apiResponse.json();
     } catch {
       const msg = 'Platform API returned non-JSON response';
+      DIAG('5', 'FAILED', msg);
       await updatePlatformStatus(fsBase, resolvedId, key, authHeaders, { importStatus: 'error', lastError: msg, lastImportAt: new Date().toISOString() });
       return res.status(502).json({ error: msg });
     }
 
-    // ── 6. Extract offers using configurable responsePath ─────────────────────
-    // Supports dot-notation: e.g. "data.offers"
+    DIAG('5', 'SUCCESS', `Received JSON. Top-level keys: ${Object.keys(rawData).join(', ')}`);
+
+    // ── STAGE 6: Extract offers using responsePath ────────────────────────────
     let offers = rawData;
     for (const part of responsePath.split('.')) {
       if (offers && typeof offers === 'object' && part in offers) {
@@ -215,7 +269,7 @@ export default async function handler(req, res) {
     }
 
     if (!Array.isArray(offers)) {
-      // Fallback: try common envelope keys
+      DIAG('6', 'FALLBACK', `responsePath="${responsePath}" did not yield an array — trying common envelope keys`);
       offers =
         rawData.offers   ??
         rawData.data     ??
@@ -225,32 +279,37 @@ export default async function handler(req, res) {
         (Array.isArray(rawData) ? rawData : []);
     }
 
-    // ── 7. Fetch existing externalIds to detect duplicates ────────────────────
-    const existingSnap = await fetch(`${fsBase}/tasks${key}&pageSize=2000`, { headers: authHeaders }).then(r => r.json());
-    const existingIds  = new Set();
+    DIAG('6', 'OFFERS', `Found ${Array.isArray(offers) ? offers.length : 'NON-ARRAY'} offers via responsePath="${responsePath}"`);
+
+    // ── STAGE 7: Fetch existing externalIds ───────────────────────────────────
+    DIAG('7', 'START', 'Fetching existing tasks to detect duplicates');
+    let existingSnap;
+    try {
+      const r = await fetch(`${fsBase}/tasks${key}&pageSize=2000`, { headers: authHeaders });
+      DIAG('7', 'TASKS_HTTP', `Status=${r.status}`);
+      existingSnap = await r.json();
+    } catch (e) {
+      DIAG('7', 'ERROR', `Failed to fetch existing tasks: ${e.message} — continuing without dedup`);
+      existingSnap = {};
+    }
+
+    const existingIds = new Set();
     if (Array.isArray(existingSnap.documents)) {
       for (const d of existingSnap.documents) {
         const eid = d.fields?.externalId?.stringValue || d.fields?.offerId?.stringValue;
         if (eid) existingIds.add(eid);
       }
     }
+    DIAG('7', 'EXISTING', `Found ${existingIds.size} existing task IDs`);
 
-    // ── 8. Map raw offers to task documents ───────────────────────────────────
-    // offerMapping is a key→fieldPath dictionary e.g. { id: "offer_id", title: "name", payout: "payout" }
+    // ── STAGE 8: Map and filter offers ────────────────────────────────────────
     const defaultMapping = {
-      id:          'id',
-      title:       'name',
-      description: 'description',
-      payout:      'payout',
-      url:         'url',
-      image:       'image',
-      category:    'category',
-      countries:   'countries',
-      devices:     'devices',
+      id: 'id', title: 'name', description: 'description',
+      payout: 'payout', url: 'url', image: 'image',
+      category: 'category', countries: 'countries', devices: 'devices',
     };
     const mapping = { ...defaultMapping, ...offerMapping };
 
-    // Resolve a dotted path like "data.offer_id" from a raw offer object
     const getField = (obj, path) => {
       if (!path) return undefined;
       let cur = obj;
@@ -262,8 +321,7 @@ export default async function handler(req, res) {
     };
 
     const toImport = [];
-
-    for (const offer of offers) {
+    for (const offer of (Array.isArray(offers) ? offers : [])) {
       const rawId     = getField(offer, mapping.id) ?? offer.id ?? offer.offer_id;
       const externalId = rawId !== undefined && rawId !== null ? String(rawId) : '';
       if (!externalId || existingIds.has(externalId)) continue;
@@ -276,8 +334,9 @@ export default async function handler(req, res) {
 
       toImport.push({ externalId, title, description, payout, url: taskUrl });
     }
+    DIAG('8', 'TO_IMPORT', `${toImport.length} new tasks to create (${(Array.isArray(offers) ? offers.length : 0) - toImport.length} skipped as duplicates)`);
 
-    // ── 9. Write new tasks to Firestore in parallel batches ───────────────────
+    // ── STAGE 9: Write new tasks to Firestore ─────────────────────────────────
     const BATCH = 20;
     let imported = 0;
 
@@ -311,35 +370,49 @@ export default async function handler(req, res) {
           }),
         }))
       );
-      imported += results.filter(r => r.ok).length;
+      const batchOk  = results.filter(r => r.ok).length;
+      const batchFail = results.filter(r => !r.ok).length;
+      imported += batchOk;
+      if (batchFail > 0) {
+        // Sample first failure for diagnosis
+        const failIdx = results.findIndex(r => !r.ok);
+        const failBody = await results[failIdx].text().catch(() => 'n/a');
+        DIAG('9', 'BATCH_PARTIAL', `chunk[${i}..${i+chunk.length}] ok=${batchOk} fail=${batchFail} first_fail_status=${results[failIdx].status} body=${failBody.slice(0,200)}`);
+      } else {
+        DIAG('9', 'BATCH_OK', `chunk[${i}..${i+chunk.length}] all ${batchOk} written`);
+      }
     }
 
-    const duration = Date.now() - startTime;
-    const skipped  = offers.length - toImport.length;
+    DIAG('9', 'DONE', `Total imported=${imported}`);
 
-    // ── 10. Update platform import status in Firestore ────────────────────────
-    // Also write any migrated generic fields derived from legacy format.
+    const duration = Date.now() - startTime;
+    const skipped  = (Array.isArray(offers) ? offers.length : 0) - toImport.length;
+
+    // ── STAGE 10: Update platform status ──────────────────────────────────────
+    DIAG('10', 'STATUS_UPDATE', `Patching platform status for resolvedId="${resolvedId}"`);
     await updatePlatformStatus(fsBase, resolvedId, key, authHeaders, {
       importStatus:         'success',
       lastError:            null,
       lastImportAt:         new Date().toISOString(),
       lastImportCount:      imported,
-      totalOffersFound:     offers.length,
+      totalOffersFound:     Array.isArray(offers) ? offers.length : 0,
       lastImportDurationMs: duration,
       ...(legacyAutoMigrate || {}),
     });
+
+    DIAG('10', 'DONE', `duration=${duration}ms imported=${imported} skipped=${skipped}`);
 
     return res.status(200).json({
       success:     true,
       imported,
       skipped,
-      totalOffers: offers.length,
-      offers:      offers.slice(0, 200),
+      totalOffers: Array.isArray(offers) ? offers.length : 0,
+      offers:      Array.isArray(offers) ? offers.slice(0, 200) : [],
       duration,
     });
 
   } catch (error) {
-    console.error('[import-platform] Unhandled error:', error);
+    console.error('[import-platform] UNHANDLED ERROR:', error);
     return res.status(500).json({ error: String(error.message || error) });
   }
 }
@@ -366,11 +439,12 @@ async function updatePlatformStatus(fsBase, platformName, key, authHeaders, stat
       }
     }
 
-    await fetch(`${fsBase}/platforms/${platformName}${key}&${fieldPaths}`, {
+    const patchRes = await fetch(`${fsBase}/platforms/${platformName}${key}&${fieldPaths}`, {
       method:  'PATCH',
       headers: { 'Content-Type': 'application/json', ...authHeaders },
       body:    JSON.stringify({ fields }),
     });
+    console.log(`[import-platform] updatePlatformStatus: HTTP ${patchRes.status} for "${platformName}"`);
   } catch (e) {
     console.warn('[import-platform] Could not update platform status:', e.message);
   }

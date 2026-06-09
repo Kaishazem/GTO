@@ -92,9 +92,11 @@ function apiDevPlugin(): Plugin {
         };
 
         try {
-          // Import the handler via file:// URL so Node.js resolves it correctly.
-          // ESM cache is fine here — handlers don't change during a dev session.
-          const mod = await import(pathToFileURL(handlerPath).href);
+          // Bypass the Node.js ESM module cache by appending a timestamp query param.
+          // Without this, any code change to an api/*.js file is silently ignored
+          // for the lifetime of the dev server process (modules are cached by URL).
+          const handlerUrl = `${pathToFileURL(handlerPath).href}?t=${Date.now()}`;
+          const mod = await import(handlerUrl);
           const handler = mod.default ?? mod;
           if (typeof handler !== 'function') {
             throw new Error(`api/${handlerName}.js does not export a default function`);
