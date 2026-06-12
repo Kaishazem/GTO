@@ -1,34 +1,28 @@
 // api/import-platform.js — Universal Platform-Agnostic Importer
 //
-// Architecture (v2):
-//   The frontend passes the full platform configuration in the request body.
-//   This handler is a pure external-API proxy: it fetches offers from the
-//   configured platform endpoint and returns them. It does NOT read from or
-//   write to Firestore — that is handled by the frontend using the Firebase
-//   SDK (which carries proper user auth and respects security rules).
+// Architecture (v3):
+//   Always returns HTTP 200. Errors are signalled via { success: false, error: "..." }.
+//   This avoids Replit proxy / browser iframe blocking of 4xx/5xx responses.
 //
 // Request body:
 //   platformName       — Firestore document ID (used for logging only)
-//   platformConfig     — Full platform config object (see shape below)
-//   [legacy fields kept for backward-compat but ignored when platformConfig present]
+//   platformConfig     — Full platform config object
 //
-// platformConfig shape:
-//   { enabled, apiBase, endpoint, apiKey, authenticationType,
-//     apiKeyParam, apiKeyHeaderName, basicAuthUser, requestMethod,
-//     headers, queryParameters, responsePath, offerMapping, displayName,
-//     pagination: { enabled, limitParam, limit } }
-//
-// Response:
-//   { success, offers, totalOffers, duration }
-//   OR { error }
+// Response (always HTTP 200):
+//   { success: true,  offers, totalOffers, duration }
+//   { success: false, error: "..." }
 
 export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  // ── CORS: reflect Origin so null-origin iframes (Replit preview) are allowed
+  const requestOrigin = req.headers?.origin;
+  res.setHeader('Access-Control-Allow-Origin', requestOrigin || '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Vary', 'Origin');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  if (req.method !== 'POST') return res.status(200).json({ success: false, error: 'Method not allowed — use POST' });
 
   const startTime = Date.now();
   const DIAG = (stage, status, detail) =>
@@ -42,7 +36,7 @@ export default async function handler(req, res) {
     // ── STAGE 1: Validate request ─────────────────────────────────────────────
     if (!platformConfig) {
       DIAG('1', 'FAILED', 'Missing platformConfig in request body');
-      return res.status(400).json({ error: 'Missing platformConfig. The frontend must pass the platform configuration in the request body.' });
+      return res.status(200).json({ success: false, error: 'Missing platformConfig. The frontend must pass the platform configuration in the request body.' });
     }
 
     DIAG('1', 'REQUEST', JSON.stringify({
@@ -83,12 +77,12 @@ export default async function handler(req, res) {
 
     if (!enabled) {
       DIAG('2', 'DISABLED', 'Platform is disabled');
-      return res.status(400).json({ error: 'Platform is disabled' });
+      return res.status(200).json({ success: false, error: 'Platform is disabled' });
     }
 
     if (!apiBase) {
       DIAG('2', 'FAILED', 'apiBase is empty — platform not fully configured');
-      return res.status(400).json({ error: 'Missing API Base URL in platform configuration. Edit the platform and set the API Base URL.' });
+      return res.status(200).json({ success: false, error: 'Missing API Base URL in platform configuration. Edit the platform and set the API Base URL.' });
     }
 
     // ── STAGE 3: Build external API URL ───────────────────────────────────────
@@ -97,7 +91,7 @@ export default async function handler(req, res) {
       fullUrl = new URL(`${apiBase}${endpoint}`);
     } catch {
       DIAG('3', 'FAILED', `Invalid URL: ${apiBase}${endpoint}`);
-      return res.status(400).json({ error: `Invalid API Base URL: ${apiBase}${endpoint}` });
+      return res.status(200).json({ success: false, error: `Invalid API Base URL: ${apiBase}${endpoint}` });
     }
 
     // Append configured query parameters
@@ -148,7 +142,7 @@ export default async function handler(req, res) {
     } catch (networkErr) {
       const msg = `Network error reaching ${apiBase}: ${networkErr.message}`;
       DIAG('4', 'NETWORK_ERROR', msg);
-      return res.status(502).json({ error: msg });
+      return res.status(200).json({ success: false, error: msg });
     }
 
     DIAG('4', 'API_RESPONSE', `HTTP ${apiResponse.status} ${apiResponse.statusText}`);
@@ -157,7 +151,7 @@ export default async function handler(req, res) {
       const body = await apiResponse.text();
       const msg = `Platform API returned ${apiResponse.status}: ${body.slice(0, 300)}`;
       DIAG('4', 'FAILED', msg);
-      return res.status(502).json({ error: msg });
+      return res.status(200).json({ success: false, error: msg });
     }
 
     let rawData;
@@ -166,7 +160,7 @@ export default async function handler(req, res) {
     } catch {
       const msg = 'Platform API returned non-JSON response';
       DIAG('4', 'FAILED', msg);
-      return res.status(502).json({ error: msg });
+      return res.status(200).json({ success: false, error: msg });
     }
 
     DIAG('4', 'SUCCESS', `Received JSON. Top-level keys: ${Object.keys(rawData).join(', ')}`);
@@ -233,7 +227,6 @@ export default async function handler(req, res) {
         url: taskUrl,
         platform: displayName,
         platformId: platformName || displayName,
-        // Pass raw offer data so the frontend can access any field it needs
         _raw: offer,
       });
     }
@@ -241,7 +234,6 @@ export default async function handler(req, res) {
     const duration = Date.now() - startTime;
     DIAG('6', 'DONE', `Normalised ${normalised.length} offers in ${duration}ms`);
 
-    // Return offers to the frontend — the frontend handles dedup and Firestore writes
     return res.status(200).json({
       success: true,
       offers: normalised,
@@ -251,6 +243,6 @@ export default async function handler(req, res) {
 
   } catch (error) {
     console.error('[import-platform] UNHANDLED ERROR:', error);
-    return res.status(500).json({ error: String(error.message || error) });
+    return res.status(200).json({ success: false, error: String(error.message || error) });
   }
 }

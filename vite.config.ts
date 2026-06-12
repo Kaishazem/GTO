@@ -24,6 +24,17 @@ function apiDevPlugin(): Plugin {
         const url = req.url || '';
         if (!url.startsWith('/api/')) return next();
 
+        // Set CORS headers immediately — before the handler runs — so that
+        // even error responses (import failure, 500) carry correct CORS headers.
+        // Reflect the incoming Origin so null-origin callers (Replit preview iframe) are allowed.
+        const reqOrigin = (req.headers as Record<string, string | string[] | undefined>)['origin'];
+        const originValue = Array.isArray(reqOrigin) ? reqOrigin[0] : (reqOrigin || '*');
+        res.setHeader('Access-Control-Allow-Origin', originValue);
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+        res.setHeader('Vary', 'Origin');
+
         const parsed = new URL(url, 'http://localhost');
         const handlerName = parsed.pathname.slice('/api/'.length);
         if (!handlerName) return next();

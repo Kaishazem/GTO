@@ -1517,9 +1517,21 @@ export default function AdminPage() {
     console.log("[GTO:TEST] Platform object received:", JSON.parse(JSON.stringify(platform)));
     setTestingPlatformId(platform.id);
     try {
+      console.log("[GTO:TEST] window.location.origin =", window.location.origin);
+      console.log("[GTO:TEST] window.location.href   =", window.location.href);
+      console.log("[GTO:TEST] document.baseURI       =", document.baseURI);
+
       console.log("[GTO:TEST] ID token retrieval started");
-      const idToken = auth.currentUser ? await auth.currentUser.getIdToken() : null;
-      console.log("[GTO:TEST] ID token retrieved:", idToken ? `yes (len=${idToken.length})` : "null — user not logged in?");
+      let idToken: string | null = null;
+      try {
+        idToken = auth.currentUser ? await auth.currentUser.getIdToken() : null;
+        console.log("[GTO:TEST] ID token retrieved:", idToken ? `yes (len=${idToken.length})` : "null — no currentUser");
+      } catch (tokenErr) {
+        console.warn("[GTO:TEST] getIdToken() threw — continuing without token:", tokenErr);
+      }
+
+      const targetUrl = "/api/import-platform";
+      console.log("[GTO:TEST] Final fetch URL:", targetUrl, "→ resolves to:", new URL(targetUrl, document.baseURI).href);
 
       const bodyObj = {
         platformName: platform.id,
@@ -1528,13 +1540,10 @@ export default function AdminPage() {
       const body = JSON.stringify(bodyObj);
       console.log("[GTO:TEST] Request body created:", bodyObj);
 
-      console.log("[GTO:TEST] ► calling fetch('/api/import-platform') NOW");
-      const r = await fetch("/api/import-platform", {
+      console.log("[GTO:TEST] ► calling fetch() NOW");
+      const r = await fetch(targetUrl, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(idToken ? { "Authorization": `Bearer ${idToken}` } : {}),
-        },
+        headers: { "Content-Type": "application/json" },
         body,
       });
       console.log("[GTO:TEST] ◄ fetch() returned. status:", r.status, r.statusText);
@@ -1566,9 +1575,20 @@ export default function AdminPage() {
     console.log("[GTO:IMPORT] Platform object received:", JSON.parse(JSON.stringify(platform)));
     setImportingPlatformId(platform.id);
     try {
+      console.log("[GTO:IMPORT] window.location.origin =", window.location.origin);
+      console.log("[GTO:IMPORT] window.location.href   =", window.location.href);
+
       console.log("[GTO:IMPORT] ID token retrieval started");
-      const idToken = auth.currentUser ? await auth.currentUser.getIdToken() : null;
-      console.log("[GTO:IMPORT] ID token retrieved:", idToken ? `yes (len=${idToken.length})` : "null — user not logged in?");
+      let idToken: string | null = null;
+      try {
+        idToken = auth.currentUser ? await auth.currentUser.getIdToken() : null;
+        console.log("[GTO:IMPORT] ID token retrieved:", idToken ? `yes (len=${idToken.length})` : "null — no currentUser");
+      } catch (tokenErr) {
+        console.warn("[GTO:IMPORT] getIdToken() threw — continuing without token:", tokenErr);
+      }
+
+      const targetUrl = `${window.location.origin}/api/import-platform`;
+      console.log("[GTO:IMPORT] Final fetch URL:", targetUrl);
 
       const bodyObj = {
         platformName: platform.id,
@@ -1577,13 +1597,10 @@ export default function AdminPage() {
       const body = JSON.stringify(bodyObj);
       console.log("[GTO:IMPORT] Request body created:", bodyObj);
 
-      console.log("[GTO:IMPORT] ► calling fetch('/api/import-platform') NOW");
-      const r = await fetch("/api/import-platform", {
+      console.log("[GTO:IMPORT] ► calling fetch() NOW");
+      const r = await fetch(targetUrl, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(idToken ? { "Authorization": `Bearer ${idToken}` } : {}),
-        },
+        headers: { "Content-Type": "application/json" },
         body,
       });
       console.log("[GTO:IMPORT] ◄ fetch() returned. status:", r.status, r.statusText);
