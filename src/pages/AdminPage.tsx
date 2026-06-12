@@ -1513,41 +1513,83 @@ export default function AdminPage() {
   }
 
   async function handleTestConnection(platform: ManagedPlatform) {
+    console.log("[GTO:TEST] ── ENTERED handleTestConnection ──────────────────");
+    console.log("[GTO:TEST] Platform object received:", JSON.parse(JSON.stringify(platform)));
     setTestingPlatformId(platform.id);
     try {
+      console.log("[GTO:TEST] ID token retrieval started");
+      const idToken = auth.currentUser ? await auth.currentUser.getIdToken() : null;
+      console.log("[GTO:TEST] ID token retrieved:", idToken ? `yes (len=${idToken.length})` : "null — user not logged in?");
+
+      const bodyObj = {
+        platformName: platform.id,
+        platformConfig: buildPlatformConfig(platform),
+      };
+      const body = JSON.stringify(bodyObj);
+      console.log("[GTO:TEST] Request body created:", bodyObj);
+
+      console.log("[GTO:TEST] ► calling fetch('/api/import-platform') NOW");
       const r = await fetch("/api/import-platform", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          platformName: platform.id,
-          platformConfig: buildPlatformConfig(platform),
-        }),
+        headers: {
+          "Content-Type": "application/json",
+          ...(idToken ? { "Authorization": `Bearer ${idToken}` } : {}),
+        },
+        body,
       });
+      console.log("[GTO:TEST] ◄ fetch() returned. status:", r.status, r.statusText);
+
       const data = await r.json() as { success?: boolean; error?: string; totalOffers?: number };
+      console.log("[GTO:TEST] Parsed response:", data);
+
       if (data.success) {
         toast({ title: `✅ Connection OK — ${data.totalOffers ?? 0} offers found` });
       } else {
         toast({ title: "Connection Failed", description: data.error || "Unknown error", variant: "destructive" });
       }
     } catch (e) {
+      console.error("[GTO:TEST] ✖ CAUGHT ERROR ──────────────────────────────");
+      console.error("[GTO:TEST] Error object:", e);
+      if (e instanceof Error) {
+        console.error("[GTO:TEST] message:", e.message);
+        console.error("[GTO:TEST] stack:", e.stack);
+      }
       toast({ title: "Test Failed", description: e instanceof Error ? e.message : "Network error", variant: "destructive" });
     } finally {
       setTestingPlatformId(null);
+      console.log("[GTO:TEST] ── handleTestConnection DONE ──────────────────");
     }
   }
 
   async function handleRunImport(platform: ManagedPlatform) {
+    console.log("[GTO:IMPORT] ── ENTERED handleRunImport ──────────────────");
+    console.log("[GTO:IMPORT] Platform object received:", JSON.parse(JSON.stringify(platform)));
     setImportingPlatformId(platform.id);
     try {
+      console.log("[GTO:IMPORT] ID token retrieval started");
+      const idToken = auth.currentUser ? await auth.currentUser.getIdToken() : null;
+      console.log("[GTO:IMPORT] ID token retrieved:", idToken ? `yes (len=${idToken.length})` : "null — user not logged in?");
+
+      const bodyObj = {
+        platformName: platform.id,
+        platformConfig: buildPlatformConfig(platform),
+      };
+      const body = JSON.stringify(bodyObj);
+      console.log("[GTO:IMPORT] Request body created:", bodyObj);
+
+      console.log("[GTO:IMPORT] ► calling fetch('/api/import-platform') NOW");
       const r = await fetch("/api/import-platform", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          platformName: platform.id,
-          platformConfig: buildPlatformConfig(platform),
-        }),
+        headers: {
+          "Content-Type": "application/json",
+          ...(idToken ? { "Authorization": `Bearer ${idToken}` } : {}),
+        },
+        body,
       });
+      console.log("[GTO:IMPORT] ◄ fetch() returned. status:", r.status, r.statusText);
+
       const data = await r.json() as { success?: boolean; error?: string; offers?: Array<{ externalId: string; title: string; description: string; payout: number; url: string; platform: string; platformId: string }> };
+      console.log("[GTO:IMPORT] Parsed response: success=", data.success, "offers=", (data.offers || []).length, "error=", data.error);
       if (!data.success) {
         toast({ title: "Import Failed", description: data.error || "Unknown error", variant: "destructive" });
         return;
@@ -1610,6 +1652,12 @@ export default function AdminPage() {
       await fetchTasks();
       await fetchPlatforms();
     } catch (e) {
+      console.error("[GTO:IMPORT] ✖ CAUGHT ERROR ──────────────────────────────");
+      console.error("[GTO:IMPORT] Error object:", e);
+      if (e instanceof Error) {
+        console.error("[GTO:IMPORT] message:", e.message);
+        console.error("[GTO:IMPORT] stack:", e.stack);
+      }
       // Record error status
       try {
         await updateDoc(doc(db, "platforms", platform.id), {
@@ -1622,6 +1670,7 @@ export default function AdminPage() {
       await fetchPlatforms();
     } finally {
       setImportingPlatformId(null);
+      console.log("[GTO:IMPORT] ── handleRunImport DONE ──────────────────");
     }
   }
 
