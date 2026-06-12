@@ -859,20 +859,38 @@ export default function AdminPage() {
     }
   }
 
+  function buildPlatformConfig(p: ManagedPlatform) {
+    return {
+      enabled: p.enabled,
+      apiBase: p.apiBase,
+      endpoint: p.endpoint,
+      apiKey: p.apiKey,
+      authenticationType: p.authenticationType,
+      apiKeyParam: p.apiKeyParam,
+      apiKeyHeaderName: p.apiKeyHeaderName,
+      basicAuthUser: p.basicAuthUser,
+      requestMethod: p.requestMethod,
+      headers: p.headers,
+      queryParameters: p.queryParameters,
+      responsePath: p.responsePath,
+      offerMapping: p.offerMapping,
+      displayName: p.displayName,
+    };
+  }
+
   async function fetchOffersFromNetwork(platformId: string) {
     setFetchingNetwork(platformId);
     setImportedOffers([]);
     setSelectedImportOffers(new Set());
     try {
-      const firebaseIdToken = await getAdminIdToken();
+      const platform = platforms.find((p) => p.id === platformId);
+      if (!platform) throw new Error("Platform not found — please refresh the page.");
       const r = await fetch("/api/import-platform", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           platformName: platformId,
-          firebaseProjectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "green-task-orbit",
-          firebaseApiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyCYC0sGV6EjRA3q4fmhjxSQck2Y0Era_SM",
-          firebaseIdToken,
+          platformConfig: buildPlatformConfig(platform),
         }),
       });
       const d = await r.json() as { success?: boolean; offers?: Record<string, unknown>[]; error?: string };
@@ -1159,20 +1177,52 @@ export default function AdminPage() {
   }
 
   async function runAutoImport() {
-    // Load enabled platforms with autoImport = true from Firestore
-    let autoSnap;
-    try {
-      autoSnap = await getDocs(collection(db, "platforms"));
-    } catch {
-      setAutoImportStatus("error");
-      setAutoImportLog(["❌ Could not load platforms from Firestore."]);
-      return;
-    }
+    // Use already-loaded platforms state; fall back to Firestore fetch if empty
+    let activePlatforms = platforms.filter((p) => p.enabled !== false && p.autoImport && p.apiBase);
 
-    const activePlatforms = autoSnap.docs.filter((d) => {
-      const data = d.data();
-      return data.enabled !== false && data.autoImport === true && data.apiBase;
-    });
+    if (activePlatforms.length === 0) {
+      // Platforms may not be loaded yet — fetch them directly
+      try {
+        const snap = await getDocs(collection(db, "platforms"));
+        activePlatforms = snap.docs
+          .filter((d) => {
+            const data = d.data();
+            return data.enabled !== false && data.autoImport === true && data.apiBase;
+          })
+          .map((d) => {
+            const data = d.data();
+            const sv = (k: string) => String(data[k] || "");
+            return {
+              id: d.id,
+              name: sv("name"),
+              displayName: sv("displayName") || sv("name"),
+              enabled: data.enabled !== false,
+              apiBase: sv("apiBase"),
+              endpoint: sv("endpoint"),
+              authenticationType: (sv("authenticationType") || "queryParam") as ManagedPlatform["authenticationType"],
+              apiKey: sv("apiKey") || sv("adgemApiKey") || sv("lootablyApiKey"),
+              apiKeyParam: sv("apiKeyParam") || "api_key",
+              apiKeyHeaderName: sv("apiKeyHeaderName") || "X-API-Key",
+              basicAuthUser: sv("basicAuthUser"),
+              requestMethod: (sv("requestMethod") || "GET") as ManagedPlatform["requestMethod"],
+              headers: (data.headers as Record<string, string>) || {},
+              queryParameters: (data.queryParameters as Record<string, string>) || {},
+              responsePath: sv("responsePath") || "offers",
+              offerMapping: (data.offerMapping as Record<string, string>) || {},
+              postbackUrl: sv("postbackUrl"),
+              autoImport: !!data.autoImport,
+              importInterval: Number(data.importInterval || 30),
+              rateLimit: Number(data.rateLimit || 60),
+              importStatus: data.importStatus as ManagedPlatform["importStatus"],
+              createdAt: (data.createdAt as Timestamp)?.toDate() || new Date(),
+            } as ManagedPlatform;
+          });
+      } catch {
+        setAutoImportStatus("error");
+        setAutoImportLog(["❌ Could not load platforms from Firestore."]);
+        return;
+      }
+    }
 
     if (activePlatforms.length === 0) {
       setAutoImportStatus("idle");
@@ -1183,30 +1233,78 @@ export default function AdminPage() {
     const log: string[] = [];
     let totalImported = 0;
 
-    const fbProjectId     = import.meta.env.VITE_FIREBASE_PROJECT_ID || "green-task-orbit";
-    const fbApiKey        = import.meta.env.VITE_FIREBASE_API_KEY    || "AIzaSyCYC0sGV6EjRA3q4fmhjxSQck2Y0Era_SM";
-    const firebaseIdToken = await getAdminIdToken();
+    // Fetch existing task externalIds once for dedup across all platforms
+    let existingIds = new Set<string>();
+    try {
+      const existingSnap = await getDocs(collection(db, "tasks"));
+      existingSnap.docs.forEach((d) => {
+        const eid = d.data().externalId || d.data().offerId;
+        if (eid) existingIds.add(String(eid));
+      });
+    } catch { /* continue without dedup */ }
 
-    for (const platDoc of activePlatforms) {
-      const displayName = String(platDoc.data().displayName || platDoc.data().name || platDoc.id);
+    for (const plat of activePlatforms) {
+      const displayName = plat.displayName || plat.name || plat.id;
       try {
         const r = await fetch("/api/import-platform", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            platformName: platDoc.id,
-            firebaseProjectId: fbProjectId,
-            firebaseApiKey: fbApiKey,
-            firebaseIdToken,
+            platformName: plat.id,
+            platformConfig: buildPlatformConfig(plat),
           }),
         });
-        const d = await r.json() as { success?: boolean; imported?: number; error?: string };
-        if (d.success) {
-          log.push(`✅ ${displayName}: ${d.imported ?? 0} new offer(s) imported`);
-          totalImported += d.imported ?? 0;
-        } else {
+        const d = await r.json() as { success?: boolean; offers?: Array<{ externalId: string; title: string; description: string; payout: number; url: string; platform: string; platformId: string }>; error?: string };
+        if (!d.success) {
           log.push(`⚠ ${displayName}: ${d.error || "fetch failed"}`);
+          continue;
         }
+
+        const toImport = (d.offers || []).filter((o) => o.externalId && !existingIds.has(o.externalId));
+        let imported = 0;
+        const BATCH = 20;
+        for (let i = 0; i < toImport.length; i += BATCH) {
+          const chunk = toImport.slice(i, i + BATCH);
+          await Promise.all(chunk.map((item) =>
+            addDoc(collection(db, "tasks"), {
+              platform: item.platform,
+              platformId: item.platformId,
+              title: item.title,
+              description: item.description,
+              reward: item.payout,
+              payout: item.payout,
+              url: item.url,
+              externalId: item.externalId,
+              offerId: item.externalId,
+              network: item.platformId,
+              status: "published",
+              taskType: "platform",
+              type: item.payout >= 0.05 ? "premium" : "simple",
+              active: true,
+              networkStatus: "pending",
+              manualAdminRate: 0.35,
+              importedFrom: item.platformId,
+              createdAt: serverTimestamp(),
+            })
+          ));
+          imported += chunk.length;
+          // Add newly imported IDs to the set so subsequent platforms don't duplicate
+          chunk.forEach((item) => existingIds.add(item.externalId));
+        }
+
+        // Update platform status
+        try {
+          await updateDoc(doc(db, "platforms", plat.id), {
+            importStatus: "success",
+            lastError: null,
+            lastImportAt: new Date().toISOString(),
+            lastImportCount: imported,
+            totalOffersFound: (d.offers || []).length,
+          });
+        } catch { /* non-critical */ }
+
+        log.push(`✅ ${displayName}: ${imported} new offer(s) imported`);
+        totalImported += imported;
       } catch (e) {
         log.push(`⚠ ${displayName}: ${e instanceof Error ? e.message : "network error"}`);
       }
@@ -1387,25 +1485,13 @@ export default function AdminPage() {
   async function handleTestConnection(platform: ManagedPlatform) {
     setTestingPlatformId(platform.id);
     try {
-      console.log("[DIAG][2] handleTestConnection — platform.id=", platform.id);
-      const firebaseIdToken = await getAdminIdToken();
-      const requestBody = {
-        platformName: platform.id,
-        firebaseProjectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "green-task-orbit",
-        firebaseApiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyCYC0sGV6EjRA3q4fmhjxSQck2Y0Era_SM",
-        firebaseIdToken,
-      };
-      console.log("[DIAG][2] Sending request body:", {
-        platformName: requestBody.platformName,
-        firebaseProjectId: requestBody.firebaseProjectId,
-        hasApiKey: !!requestBody.firebaseApiKey,
-        hasIdToken: !!firebaseIdToken,
-        idTokenLength: firebaseIdToken.length,
-      });
       const r = await fetch("/api/import-platform", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(requestBody),
+        body: JSON.stringify({
+          platformName: platform.id,
+          platformConfig: buildPlatformConfig(platform),
+        }),
       });
       const data = await r.json() as { success?: boolean; error?: string; totalOffers?: number };
       if (data.success) {
@@ -1413,7 +1499,6 @@ export default function AdminPage() {
       } else {
         toast({ title: "Connection Failed", description: data.error || "Unknown error", variant: "destructive" });
       }
-      await fetchPlatforms();
     } catch (e) {
       toast({ title: "Test Failed", description: e instanceof Error ? e.message : "Network error", variant: "destructive" });
     } finally {
@@ -1424,27 +1509,87 @@ export default function AdminPage() {
   async function handleRunImport(platform: ManagedPlatform) {
     setImportingPlatformId(platform.id);
     try {
-      const firebaseIdToken = await getAdminIdToken();
       const r = await fetch("/api/import-platform", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           platformName: platform.id,
-          firebaseProjectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "green-task-orbit",
-          firebaseApiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyCYC0sGV6EjRA3q4fmhjxSQck2Y0Era_SM",
-          firebaseIdToken,
+          platformConfig: buildPlatformConfig(platform),
         }),
       });
-      const data = await r.json() as { success?: boolean; error?: string; imported?: number; skipped?: number; totalOffers?: number };
-      if (data.success) {
-        toast({ title: `✅ Imported ${data.imported} new task(s)`, description: `${data.skipped} duplicates skipped out of ${data.totalOffers} total offers.` });
-        await fetchTasks();
-      } else {
+      const data = await r.json() as { success?: boolean; error?: string; offers?: Array<{ externalId: string; title: string; description: string; payout: number; url: string; platform: string; platformId: string }> };
+      if (!data.success) {
         toast({ title: "Import Failed", description: data.error || "Unknown error", variant: "destructive" });
+        return;
       }
+
+      // Dedup: collect existing externalIds from Firestore
+      const existingSnap = await getDocs(collection(db, "tasks"));
+      const existingIds = new Set<string>();
+      existingSnap.docs.forEach((d) => {
+        const eid = d.data().externalId || d.data().offerId;
+        if (eid) existingIds.add(String(eid));
+      });
+
+      const toImport = (data.offers || []).filter((o) => o.externalId && !existingIds.has(o.externalId));
+
+      let imported = 0;
+      const BATCH = 20;
+      for (let i = 0; i < toImport.length; i += BATCH) {
+        const chunk = toImport.slice(i, i + BATCH);
+        await Promise.all(chunk.map((item) =>
+          addDoc(collection(db, "tasks"), {
+            platform: item.platform,
+            platformId: item.platformId,
+            title: item.title,
+            description: item.description,
+            reward: item.payout,
+            payout: item.payout,
+            url: item.url,
+            externalId: item.externalId,
+            offerId: item.externalId,
+            network: item.platformId,
+            status: "published",
+            taskType: "platform",
+            type: item.payout >= 0.05 ? "premium" : "simple",
+            active: true,
+            networkStatus: "pending",
+            manualAdminRate: 0.35,
+            importedFrom: item.platformId,
+            createdAt: serverTimestamp(),
+          })
+        ));
+        imported += chunk.length;
+      }
+
+      const skipped = (data.offers || []).length - toImport.length;
+
+      // Update platform status in Firestore via Firebase SDK
+      await updateDoc(doc(db, "platforms", platform.id), {
+        importStatus: "success",
+        lastError: null,
+        lastImportAt: new Date().toISOString(),
+        lastImportCount: imported,
+        totalOffersFound: (data.offers || []).length,
+      });
+
+      toast({
+        title: `✅ Imported ${imported} new task(s)`,
+        description: `${skipped} duplicates skipped out of ${(data.offers || []).length} total offers.`,
+      });
+      await fetchTasks();
       await fetchPlatforms();
     } catch (e) {
+      // Record error status
+      try {
+        await updateDoc(doc(db, "platforms", platform.id), {
+          importStatus: "error",
+          lastError: e instanceof Error ? e.message : String(e),
+          lastImportAt: new Date().toISOString(),
+        });
+      } catch { /* ignore secondary error */ }
       toast({ title: "Import Error", description: e instanceof Error ? e.message : "Network error", variant: "destructive" });
+      await fetchPlatforms();
     } finally {
       setImportingPlatformId(null);
     }
