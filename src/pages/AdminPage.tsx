@@ -607,24 +607,54 @@ export default function AdminPage() {
         const sv = (k: string) => String(data[k] || "");
         const nv = (k: string, def = 0) => Number(data[k] || def);
         const bv = (k: string, def = true) => data[k] !== false && data[k] !== undefined ? (data[k] === false ? false : def) : def;
+        // ── Legacy field resolution ──────────────────────────────────────────
+        // Platforms created before the generic API config system used per-network
+        // field names (adgemApiKey, adgemAppId, lootablyApiKey, etc.).
+        // Auto-populate the generic fields so the import handler works immediately.
+        let resolvedApiBase  = sv("apiBase");
+        let resolvedEndpoint = sv("endpoint");
+        let resolvedAuthType = sv("authenticationType") || "queryParam";
+        let resolvedApiKey   = sv("apiKey") || sv("adgemApiKey") || sv("lootablyApiKey") || sv("cpabuildApiKey") || sv("monetizerApiKey") || sv("cpagripApiKey");
+        let resolvedQueryParams: Record<string, string> = (data.queryParameters as Record<string, string>) || {};
+        let resolvedResponsePath = sv("responsePath") || "offers";
+
+        if (!resolvedApiBase) {
+          const adgemKey   = sv("adgemApiKey");
+          const adgemAppId = sv("adgemAppId");
+          if (adgemKey && adgemAppId) {
+            resolvedApiBase   = "https://api.adgem.com/v1";
+            resolvedEndpoint  = "/offers";
+            resolvedAuthType  = "bearer";
+            resolvedResponsePath = "offers";
+            resolvedQueryParams  = { ...resolvedQueryParams, app_id: adgemAppId };
+          }
+
+          const lootablyKey = sv("lootablyApiKey");
+          if (!resolvedApiBase && lootablyKey) {
+            resolvedApiBase  = "https://lootably.com/api";
+            resolvedEndpoint = "/placements/poll";
+            resolvedAuthType = "apiKeyHeader";
+            resolvedResponsePath = "offers";
+          }
+        }
+        // ─────────────────────────────────────────────────────────────────────
+
         return {
           id: d.id,
           name: sv("name"),
           displayName: sv("displayName") || sv("name"),
           enabled: data.enabled !== false,
-          apiBase: sv("apiBase"),
-          endpoint: sv("endpoint"),
-          authenticationType: (sv("authenticationType") || "queryParam") as ManagedPlatform["authenticationType"],
-          // Legacy field fallback: pre-populate apiKey from old per-network field names
-          // so the platform edit form shows the key even before the admin re-saves.
-          apiKey: sv("apiKey") || sv("adgemApiKey") || sv("lootablyApiKey") || sv("cpabuildApiKey") || sv("monetizerApiKey") || sv("cpagripApiKey"),
+          apiBase: resolvedApiBase,
+          endpoint: resolvedEndpoint,
+          authenticationType: resolvedAuthType as ManagedPlatform["authenticationType"],
+          apiKey: resolvedApiKey,
           apiKeyParam: sv("apiKeyParam") || "api_key",
           apiKeyHeaderName: sv("apiKeyHeaderName") || "X-API-Key",
           basicAuthUser: sv("basicAuthUser"),
           requestMethod: (sv("requestMethod") || "GET") as ManagedPlatform["requestMethod"],
           headers: (data.headers as Record<string, string>) || {},
-          queryParameters: (data.queryParameters as Record<string, string>) || {},
-          responsePath: sv("responsePath") || "offers",
+          queryParameters: resolvedQueryParams,
+          responsePath: resolvedResponsePath,
           offerMapping: (data.offerMapping as Record<string, string>) || {},
           postbackUrl: sv("postbackUrl"),
           autoImport: bv("autoImport", false),
