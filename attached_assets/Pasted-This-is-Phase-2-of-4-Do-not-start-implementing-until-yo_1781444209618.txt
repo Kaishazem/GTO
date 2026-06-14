@@ -1,0 +1,151 @@
+This is Phase 2 of 4. Do not start implementing until you have read this entire phase. Complete this phase only, then stop and provide a detailed implementation report before continuing to the next phase. Preserve all previous work.
+
+---
+
+Universal Platform Engine - Phase 2 (Universal Import Engine)
+
+Now build the generic import engine based on the architecture from Phase 1.
+
+The engine must dynamically construct every request.
+
+---
+
+HTTP Methods
+
+Support:
+
+- GET
+- POST
+- PUT
+- PATCH
+- DELETE
+
+---
+
+Authentication
+
+Support:
+
+- Bearer Token
+- API Key Header
+- API Key Query Parameter
+- Basic Authentication
+- JWT
+- Custom Headers
+- No Authentication
+
+Authentication type must come only from Firestore configuration.
+
+Never hardcode authentication.
+
+---
+
+URL Builder
+
+Construct requests dynamically using:
+
+- Base URL
+- Endpoint
+- Query Parameters
+- Authentication Parameters
+- Headers
+- Extra Parameters
+- Request Body
+
+Correctly merge all values.
+
+Log the final URL before making the request.
+
+---
+
+Auto Detection
+
+Automatically detect:
+
+- JSON
+- Nested JSON
+- JSON Arrays
+- XML
+- RSS
+- CSV
+- TSV
+- ZIP
+- GZIP
+- Plain Text
+- Content-Type
+- Encoding
+- Compression
+
+Never assume JSON.
+
+---
+
+Universal Response Parser
+
+Read configurable paths such as:
+
+- offers
+- data
+- results
+- responsePath
+- itemsPath
+- offerPath
+
+No hardcoded parser.
+
+---
+
+Universal Mapping
+
+Map every field from Firestore configuration.
+
+Examples:
+
+- title
+- description
+- reward
+- image
+- countries
+- trackingUrl
+- previewUrl
+- requirements
+- device
+- platform
+- category
+- conversionType
+
+The mapping system must tolerate missing fields.
+
+Missing fields should generate warnings, not abort the import.
+
+---
+
+Universal Normalizer
+
+Convert every platform into one internal Task model.
+
+Every platform must produce identical Task objects before Firestore storage.
+
+---
+
+Testing
+
+After implementing this phase, verify:
+
+1. The engine can construct URLs correctly for both AdGem and CPAGrip
+2. Authentication is applied correctly
+3. Response detection works for JSON
+4. The parser can extract offers from nested structures
+5. Mapping works with Firestore configuration
+6. Normalization produces consistent Task objects
+
+---
+
+After completing this phase, provide a detailed report of:
+1. How the URL builder works
+2. How authentication is resolved
+3. How response detection works
+4. How the parser extracts offers
+5. How mapping and normalization work
+6. Test results for AdGem and CPAGrip configurations
+7. Any issues encountered
