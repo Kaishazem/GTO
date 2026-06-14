@@ -1,23 +1,24 @@
-// api/import-platform.js — Universal Platform Engine (v4)
+// api/import-platform.js — Universal Platform Engine (v5 / Phase 2)
 //
-// Orchestrates the modular import pipeline. Each stage is handled by a
-// dedicated module — no platform-specific logic lives here.
+// Orchestrates the full modular import pipeline.
+// Supports: GET/POST/PUT/PATCH/DELETE, all auth types, JSON/XML/RSS/CSV/TSV,
+// configurable response paths, universal field mapping, canonical Task model.
 //
 // Request body:
 //   platformName   — Firestore document ID (used for logging & normalisation)
 //   platformConfig — Full platform config object (from Firestore / Admin UI)
 //
 // Response (always HTTP 200):
-//   { success: true,  offers, totalOffers, duration }
+//   { success: true,  offers, totalOffers, duration, format, warnings }
 //   { success: false, error: "..." }
 
-import { createLogger }          from './modules/logger.js';
-import { validatePlatformConfig } from './modules/validationEngine.js';
-import { buildRequest }           from './modules/requestBuilder.js';
-import { executeRequest }         from './modules/httpClient.js';
-import { detectResponseType }     from './modules/responseDetector.js';
-import { parseResponseBody, extractOffersArray } from './modules/responseParser.js';
-import { normalizeOffers }        from './modules/normalizer.js';
+import { createLogger }           from './modules/logger.js';
+import { validatePlatformConfig }  from './modules/validationEngine.js';
+import { buildRequest }            from './modules/requestBuilder.js';
+import { executeRequest }          from './modules/httpClient.js';
+import { detectResponseType }      from './modules/responseDetector.js';
+import { parseBodyText, extractOffersArray } from './modules/responseParser.js';
+import { normalizeOffers }         from './modules/normalizer.js';
 
 export default async function handler(req, res) {
   // ── CORS: reflect Origin so null-origin iframes (Replit preview) are allowed
@@ -41,7 +42,7 @@ export default async function handler(req, res) {
   try {
     const { platformName, platformConfig } = req.body;
 
-    // ── STAGE 1: Validate ────────────────────────────────────────────────────
+    // ── STAGE 1: Validate & extract typed config ─────────────────────────────
     const validation = validatePlatformConfig(platformConfig);
     if (!validation.valid) {
       log.stage('1', 'FAILED', validation.error);
@@ -51,26 +52,29 @@ export default async function handler(req, res) {
     const config = validation.config;
     config.displayName = config.displayName || platformName || 'Platform';
 
-    log.stage('1', 'REQUEST', JSON.stringify({
+    log.stage('1', 'CONFIG', JSON.stringify({
       platformName:       platformName || '(unnamed)',
       hasApiBase:         !!config.apiBase,
       hasApiKey:          !!config.apiKey,
       authenticationType: config.authenticationType,
       requestMethod:      config.requestMethod,
-      responsePath:       config.responsePath,
+      responsePaths:      config.responsePaths,
     }));
 
-    // ── STAGE 2: Build request ───────────────────────────────────────────────
+    // ── STAGE 2: Build request (URL + headers + optional body) ───────────────
     const built = buildRequest(config);
     if (!built.ok) {
       log.stage('2', 'FAILED', built.error);
       return res.status(200).json({ success: false, error: built.error });
     }
 
-    log.stage('2', 'API_REQUEST', `${config.requestMethod} ${built.logUrl} auth=${config.authenticationType}`);
+    log.stage('2', 'API_REQUEST',
+      `${config.requestMethod} ${built.logUrl} auth=${config.authenticationType}` +
+      (built.body ? ' [with body]' : '')
+    );
 
     // ── STAGE 3: Execute HTTP request ────────────────────────────────────────
-    const fetched = await executeRequest(built.url, config.requestMethod, built.headers);
+    const fetched = await executeRequest(built.url, config.requestMethod, built.headers, built.body);
     if (!fetched.ok) {
       log.stage('3', 'NETWORK_ERROR', fetched.error);
       return res.status(200).json({ success: false, error: fetched.error });
@@ -80,52 +84,84 @@ export default async function handler(req, res) {
     log.stage('3', 'API_RESPONSE', `HTTP ${response.status} ${response.statusText}`);
 
     if (!response.ok) {
-      const body = await response.text();
-      const msg  = `Platform API returned ${response.status}: ${body.slice(0, 300)}`;
+      const errBody = await response.text();
+      const msg = `Platform API returned ${response.status}: ${errBody.slice(0, 300)}`;
       log.stage('3', 'FAILED', msg);
       return res.status(200).json({ success: false, error: msg });
     }
 
-    // ── STAGE 4: Detect response type ────────────────────────────────────────
-    const detection = detectResponseType(response);
-    if (!detection.isJson) {
-      log.stage('4', 'WARN', `Non-JSON Content-Type detected — attempting parse anyway. ${detection.hint}`);
+    // ── STAGE 4: Read body text (single consumption) ─────────────────────────
+    let bodyText;
+    try {
+      bodyText = await response.text();
+    } catch (e) {
+      const msg = `Failed to read response body: ${e.message}`;
+      log.stage('4', 'FAILED', msg);
+      return res.status(200).json({ success: false, error: msg });
     }
 
-    // ── STAGE 5: Parse response body ─────────────────────────────────────────
-    const parsed = await parseResponseBody(response);
+    // ── STAGE 5: Detect format from headers + body preview ───────────────────
+    const detection = detectResponseType(response, bodyText.slice(0, 500));
+    log.stage('5', 'FORMAT', `format=${detection.format} encoding=${detection.encoding} compressed=${detection.compressed} hint="${detection.hint}"`);
+
+    if (detection.format === 'gzip' || detection.format === 'zip') {
+      const msg = `Compressed response (${detection.format}) is not yet supported. Configure the platform API to return uncompressed data.`;
+      log.stage('5', 'FAILED', msg);
+      return res.status(200).json({ success: false, error: msg });
+    }
+
+    // ── STAGE 6: Parse body ───────────────────────────────────────────────────
+    const parsed = parseBodyText(bodyText, detection.format);
     if (!parsed.ok) {
-      log.stage('5', 'FAILED', parsed.error);
+      log.stage('6', 'FAILED', parsed.error);
       return res.status(200).json({ success: false, error: parsed.error });
     }
 
-    log.stage('5', 'SUCCESS', `Received JSON. Top-level keys: ${Object.keys(parsed.rawData).join(', ')}`);
+    const topKeys = Array.isArray(parsed.rawData)
+      ? `[array of ${parsed.rawData.length}]`
+      : Object.keys(parsed.rawData).join(', ');
+    log.stage('6', 'PARSED', `format=${parsed.format} top-level keys: ${topKeys}`);
 
-    // ── STAGE 6: Extract offers array ────────────────────────────────────────
-    const { offers: rawOffers, usedFallback } = extractOffersArray(parsed.rawData, config.responsePath);
+    // ── STAGE 7: Extract offers array ─────────────────────────────────────────
+    const { offers: rawOffers, resolvedPath, usedFallback } =
+      extractOffersArray(parsed.rawData, config.responsePaths, log);
 
-    if (usedFallback) {
-      log.stage('6', 'FALLBACK', `responsePath="${config.responsePath}" did not yield an array — used envelope fallback`);
+    log.stage('7', 'OFFERS',
+      `${rawOffers.length} raw offers via path="${resolvedPath}"` +
+      (usedFallback ? ' [fallback]' : '')
+    );
+
+    if (rawOffers.length === 0) {
+      const msg = `No offers found. Response paths tried: ${config.responsePaths.join(', ')}. Top-level keys: ${topKeys}`;
+      log.stage('7', 'EMPTY', msg);
+      return res.status(200).json({
+        success: true, offers: [], totalOffers: 0,
+        duration: Date.now() - startTime, format: detection.format, warnings: [],
+      });
     }
 
-    log.stage('6', 'OFFERS', `Found ${rawOffers.length} raw offers`);
-
-    // ── STAGE 7: Normalise offers ────────────────────────────────────────────
-    const normalised = normalizeOffers(
+    // ── STAGE 8: Normalise to canonical Task model ────────────────────────────
+    const { tasks, warnings } = normalizeOffers(
       rawOffers,
       config.offerMapping,
       platformName || config.displayName,
       config.displayName,
+      log,
     );
 
     const duration = Date.now() - startTime;
-    log.stage('7', 'DONE', `Normalised ${normalised.length} offers in ${duration}ms`);
+    log.stage('8', 'DONE',
+      `${tasks.length} tasks normalised in ${duration}ms` +
+      (warnings.length > 0 ? ` (${warnings.length} warnings)` : '')
+    );
 
     return res.status(200).json({
       success:     true,
-      offers:      normalised,
-      totalOffers: normalised.length,
+      offers:      tasks,
+      totalOffers: tasks.length,
       duration,
+      format:      detection.format,
+      warnings,
     });
 
   } catch (error) {

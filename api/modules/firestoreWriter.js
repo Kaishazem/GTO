@@ -1,19 +1,29 @@
-// modules/firestoreWriter.js — Firestore document writer
-// Single responsibility: persist normalised offers to the Firestore tasks
-// collection via the REST API, handling deduplication and upsert logic.
-// Uses the same REST approach as the existing postback.js handler.
+// modules/firestoreWriter.js — Firestore document writer (v2)
+// Single responsibility: persist canonical Task objects to the Firestore tasks
+// collection via the REST API, with deduplication (externalId) and upsert logic.
 
 /**
- * Write an array of normalised offers to Firestore.
- * Skips offers whose externalId already exists in the tasks collection.
+ * Encode a JS value to a Firestore REST API field value object.
+ */
+function fsValue(v) {
+  if (v === null || v === undefined) return { nullValue: null };
+  if (typeof v === 'boolean')        return { booleanValue: v };
+  if (typeof v === 'number')         return { doubleValue: v };
+  if (Array.isArray(v))              return { arrayValue: { values: v.map(fsValue) } };
+  return { stringValue: String(v) };
+}
+
+/**
+ * Write an array of canonical Task objects to Firestore.
+ * Skips tasks whose externalId already exists in the tasks collection.
  *
- * @param {Array}  offers         - Normalised offer objects from normalizer.js
- * @param {string} projectId      - Firebase project ID
- * @param {string} apiKey         - Firebase web API key
- * @param {Object} [logger]       - Optional logger (from logger.js)
+ * @param {Array}  tasks      - Canonical Task objects from normalizer.js
+ * @param {string} projectId  - Firebase project ID
+ * @param {string} apiKey     - Firebase web API key
+ * @param {Object} [logger]   - Optional logger (from logger.js)
  * @returns {{ imported: number, skipped: number, errors: number }}
  */
-export async function writeOffers(offers, projectId, apiKey, logger) {
+export async function writeOffers(tasks, projectId, apiKey, logger) {
   const fsBase = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents`;
   const key    = `?key=${apiKey}`;
 
@@ -21,20 +31,20 @@ export async function writeOffers(offers, projectId, apiKey, logger) {
   let skipped  = 0;
   let errors   = 0;
 
-  for (const offer of offers) {
+  for (const task of tasks) {
     try {
-      // Deduplication: check if a task with this externalId already exists
+      // ── Deduplication: check for existing externalId ─────────────────────
       const queryRes = await fetch(`${fsBase}:runQuery${key}`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({
+        body: JSON.stringify({
           structuredQuery: {
             from:  [{ collectionId: 'tasks' }],
             where: {
               fieldFilter: {
                 field: { fieldPath: 'externalId' },
                 op:    'EQUAL',
-                value: { stringValue: offer.externalId },
+                value: { stringValue: task.externalId },
               },
             },
             limit: 1,
@@ -48,18 +58,26 @@ export async function writeOffers(offers, projectId, apiKey, logger) {
         continue;
       }
 
-      // Insert new task document
+      // ── Insert canonical Task document ────────────────────────────────────
       const taskDoc = {
         fields: {
-          externalId:  { stringValue: offer.externalId },
-          platform:    { stringValue: offer.platform },
-          platformId:  { stringValue: offer.platformId },
-          title:       { stringValue: offer.title },
-          description: { stringValue: offer.description },
-          payout:      { doubleValue: offer.payout },
-          url:         { stringValue: offer.url },
-          status:      { stringValue: 'active' },
-          createdAt:   { stringValue: new Date().toISOString() },
+          externalId:     fsValue(task.externalId),
+          platform:       fsValue(task.platform),
+          platformId:     fsValue(task.platformId),
+          title:          fsValue(task.title),
+          description:    fsValue(task.description),
+          payout:         fsValue(task.payout),
+          url:            fsValue(task.url),
+          image:          fsValue(task.image),
+          category:       fsValue(task.category),
+          countries:      fsValue(task.countries),
+          devices:        fsValue(task.devices),
+          requirements:   fsValue(task.requirements),
+          trackingUrl:    fsValue(task.trackingUrl),
+          previewUrl:     fsValue(task.previewUrl),
+          conversionType: fsValue(task.conversionType),
+          status:         fsValue(task.status || 'active'),
+          createdAt:      fsValue(task.createdAt || new Date().toISOString()),
         },
       };
 
@@ -73,11 +91,11 @@ export async function writeOffers(offers, projectId, apiKey, logger) {
         imported++;
       } else {
         errors++;
-        logger?.warn(`Failed to insert offer ${offer.externalId}: HTTP ${insertRes.status}`);
+        logger?.warn(`Failed to insert task ${task.externalId}: HTTP ${insertRes.status}`);
       }
     } catch (err) {
       errors++;
-      logger?.warn(`Error writing offer ${offer.externalId}: ${err.message}`);
+      logger?.warn(`Error writing task ${task.externalId}: ${err.message}`);
     }
   }
 

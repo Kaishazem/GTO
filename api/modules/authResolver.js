@@ -1,22 +1,39 @@
-// modules/authResolver.js — Authentication resolver
+// modules/authResolver.js — Authentication resolver (v2)
 // Single responsibility: apply the correct auth scheme to headers and URL.
 // Never contains platform-specific logic — everything comes from config.
+//
+// Supported types:
+//   bearer       — Authorization: Bearer <token>
+//   jwt          — Authorization: Bearer <jwt>  (alias for bearer, semantically a JWT)
+//   apiKeyHeader — Custom header name: <key>
+//   queryParam   — URL query parameter
+//   basicAuth    — Authorization: Basic base64(user:key)
+//   customHeaders— Merge extra headers object from config.extraAuthHeaders
+//   none         — No authentication applied
 
 /**
- * @param {URL} url - The URL object (may be mutated for queryParam auth)
+ * @param {URL}    url     - URL object (may be mutated for queryParam auth)
  * @param {Object} headers - Mutable headers object
- * @param {Object} config - Validated platform config
+ * @param {Object} config  - Validated platform config
  */
 export function applyAuthentication(url, headers, config) {
-  const { authenticationType, apiKey, apiKeyParam, apiKeyHeaderName, basicAuthUser } = config;
+  const {
+    authenticationType,
+    apiKey,
+    apiKeyParam,
+    apiKeyHeaderName,
+    basicAuthUser,
+    extraAuthHeaders,
+  } = config;
 
   switch (authenticationType) {
     case 'bearer':
-      headers['Authorization'] = `Bearer ${apiKey}`;
+    case 'jwt':
+      if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
       break;
 
     case 'apiKeyHeader':
-      headers[apiKeyHeaderName] = apiKey;
+      if (apiKey && apiKeyHeaderName) headers[apiKeyHeaderName] = apiKey;
       break;
 
     case 'basicAuth': {
@@ -25,9 +42,20 @@ export function applyAuthentication(url, headers, config) {
       break;
     }
 
+    case 'customHeaders':
+      if (extraAuthHeaders && typeof extraAuthHeaders === 'object') {
+        for (const [k, v] of Object.entries(extraAuthHeaders)) {
+          if (k && v !== undefined && v !== null) headers[k] = String(v);
+        }
+      }
+      break;
+
+    case 'none':
+      break;
+
     case 'queryParam':
     default:
-      if (apiKey) url.searchParams.set(apiKeyParam, apiKey);
+      if (apiKey && apiKeyParam) url.searchParams.set(apiKeyParam, apiKey);
       break;
   }
 }

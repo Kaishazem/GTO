@@ -1,5 +1,11 @@
-// modules/validationEngine.js — Config and request validation
+// modules/validationEngine.js — Config and request validation (v2)
 // Single responsibility: validate inputs and return structured errors.
+
+const VALID_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
+
+const VALID_AUTH_TYPES = new Set([
+  'bearer', 'jwt', 'apiKeyHeader', 'queryParam', 'basicAuth', 'customHeaders', 'none',
+]);
 
 /**
  * Validate and extract a typed platform config from a raw request body object.
@@ -20,27 +26,47 @@ export function validatePlatformConfig(raw) {
     return { valid: false, error: 'Platform is disabled' };
   }
 
+  const rawMethod = String(raw.requestMethod || 'GET').toUpperCase();
+  const requestMethod = VALID_METHODS.has(rawMethod) ? rawMethod : 'GET';
+
+  const rawAuthType = String(raw.authenticationType || 'queryParam');
+  const authenticationType = VALID_AUTH_TYPES.has(rawAuthType) ? rawAuthType : 'queryParam';
+
   const config = {
     enabled,
     apiBase,
     endpoint:           String(raw.endpoint           || '').trim(),
     apiKey:             String(raw.apiKey             || '').trim(),
-    authenticationType: String(raw.authenticationType || 'queryParam'),
+    authenticationType,
     apiKeyParam:        String(raw.apiKeyParam        || 'api_key'),
     apiKeyHeaderName:   String(raw.apiKeyHeaderName   || 'X-API-Key'),
     basicAuthUser:      String(raw.basicAuthUser      || ''),
-    requestMethod:      String(raw.requestMethod      || 'GET').toUpperCase(),
-    customHeaders:      (typeof raw.headers === 'object' && raw.headers)            ? raw.headers        : {},
-    queryParameters:    (typeof raw.queryParameters === 'object' && raw.queryParameters) ? raw.queryParameters : {},
-    responsePath:       String(raw.responsePath       || 'offers'),
-    offerMapping:       (typeof raw.offerMapping === 'object' && raw.offerMapping)  ? raw.offerMapping   : {},
-    displayName:        String(raw.displayName        || ''),
+    extraAuthHeaders:   (typeof raw.extraAuthHeaders === 'object' && raw.extraAuthHeaders) ? raw.extraAuthHeaders : {},
+    requestMethod,
+    customHeaders:      (typeof raw.headers === 'object' && raw.headers)                           ? raw.headers           : {},
+    queryParameters:    (typeof raw.queryParameters === 'object' && raw.queryParameters)           ? raw.queryParameters   : {},
+    requestBody:        (typeof raw.requestBody === 'object' && raw.requestBody)                   ? raw.requestBody       : null,
+    requestBodyRaw:     (typeof raw.requestBodyRaw === 'string' && raw.requestBodyRaw)             ? raw.requestBodyRaw    : null,
+    // Response extraction paths — checked in order, first match wins
+    responsePaths: (() => {
+      const paths = [];
+      if (raw.responsePath)  paths.push(String(raw.responsePath));
+      if (raw.itemsPath)     paths.push(String(raw.itemsPath));
+      if (raw.offerPath)     paths.push(String(raw.offerPath));
+      if (raw.dataPath)      paths.push(String(raw.dataPath));
+      if (paths.length === 0) paths.push('offers');
+      return paths;
+    })(),
+    offerMapping:  (typeof raw.offerMapping  === 'object' && raw.offerMapping)  ? raw.offerMapping  : {},
+    displayName:   String(raw.displayName    || ''),
     pagination: (() => {
       const p = (typeof raw.pagination === 'object' && raw.pagination) ? raw.pagination : {};
       return {
-        enabled:    !!p.enabled,
-        limitParam: String(p.limitParam || 'limit'),
-        limit:      Number(p.limit || 50) || 50,
+        enabled:      !!p.enabled,
+        limitParam:   String(p.limitParam   || 'limit'),
+        offsetParam:  String(p.offsetParam  || 'offset'),
+        limit:        Number(p.limit        || 50) || 50,
+        startOffset:  Number(p.startOffset  || 0),
       };
     })(),
   };
