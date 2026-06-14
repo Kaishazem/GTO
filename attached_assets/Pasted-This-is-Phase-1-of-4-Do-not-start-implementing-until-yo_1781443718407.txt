@@ -1,0 +1,173 @@
+This is Phase 1 of 4. Do not start implementing until you have read this entire phase. Complete this phase only, then stop and provide a detailed implementation report before continuing to the next phase. Preserve all previous work.
+
+---
+
+Universal Platform Engine - Phase 1 (Architecture)
+
+The current platform import system is working and must NOT be rewritten.
+
+Primary Objective:
+
+Do NOT replace the existing platform system.
+
+Instead, evolve the current implementation into a Universal Platform Engine through incremental refactoring.
+
+Preserve all working code.
+
+Reuse as much existing logic as possible.
+
+Only generalize the parts that are currently platform-specific.
+
+Avoid unnecessary architectural changes.
+
+Backward compatibility is mandatory.
+
+---
+
+Current Architecture
+
+Frontend:
+- React
+- TypeScript
+- Vite
+
+Backend:
+- Vercel Serverless Functions
+
+Development:
+- Replit + apiDevPlugin
+
+Database:
+- Firestore
+
+Authentication:
+- Firebase Authentication
+
+Deployment:
+- Vercel Production
+
+---
+
+Goal
+
+The system must become completely platform-independent.
+
+Adding a future platform must never require modifying JavaScript or TypeScript code.
+
+Only Firestore configuration should be required.
+
+---
+
+Modular Architecture
+
+Refactor the import engine into reusable modules.
+
+Suggested modules:
+
+1. Request Builder
+2. Authentication Resolver
+3. HTTP Client
+4. Response Detector
+5. Response Parser
+6. Normalizer
+7. Firestore Writer
+8. Logger
+9. Validation Engine
+
+Each module must have one responsibility.
+
+Avoid duplicated logic.
+
+Avoid platform-specific implementations.
+
+---
+
+Platform Independence
+
+There must never be code like:
+
+if(platform==="adgem")
+if(platform==="cpagrip")
+switch(platform)
+
+Platform names must never affect execution.
+
+Everything must come from configuration.
+
+---
+
+Backward Compatibility
+
+The following must continue working without modification:
+
+- Admin Panel
+- Current Firestore structure
+- Current API endpoints
+- Current Authentication
+- Current Replit workflow
+- Current Vercel deployment
+- Current AdGem configuration
+- Current CPAGrip configuration
+- Current legacy fields
+
+---
+
+Do not implement platform-specific fixes.
+
+Build the architecture for unlimited future platforms.
+
+---
+
+Current Platform Configurations (for reference):
+
+**AdGem:**
+- API Base URL: https://api.adgem.com/v1
+- Endpoint: /offers
+- Authentication: Bearer Token
+- API Key: (JWT token - hidden)
+- App ID: 32757
+- Status: Pending approval (account submitted for review)
+- Current Error: 404 (account not approved yet)
+
+**CPAGrip:**
+- API Base URL: https://www.cpagrip.com/common
+- Endpoint: /offer_feed_json.php
+- Authentication: Query Parameter
+- API Key (pubkey): cd6d7990d322dca572ca564c9f4a1743
+- Private Key: b921f4a8f23bbaa07ad4812adbc0d21b
+- Extra Params: user_id=2533875, key=[private_key], showall=1
+- Response Path: offers
+- Field Mapping: id:offer_id, title:title, payout:payout, url:offerlink, thumbnail:offerphoto
+- Current Error: "Platform API returned non-JSON response"
+- Likely cause: URL not constructed correctly in backend or missing private key parameter
+
+---
+
+Key Files:
+- api/import-platform.js (backend import handler)
+- src/pages/AdminPage.tsx (admin UI)
+- vite.config.ts (development plugin)
+- src/lib/firebase.ts (Firebase config)
+
+---
+
+Important
+
+Do NOT redesign the UI.
+
+Do NOT break Firestore.
+
+Do NOT remove existing APIs.
+
+Do NOT change business logic.
+
+Only refactor the architecture into modular, platform-independent structure.
+
+---
+
+After completing this phase, provide a detailed report of:
+1. What modules were created
+2. How backward compatibility is maintained
+3. What files were modified
+4. What the new architecture looks like
+5. Any potential issues or concerns

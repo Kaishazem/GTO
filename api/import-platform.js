@@ -1,16 +1,23 @@
-// api/import-platform.js — Universal Platform-Agnostic Importer
+// api/import-platform.js — Universal Platform Engine (v4)
 //
-// Architecture (v3):
-//   Always returns HTTP 200. Errors are signalled via { success: false, error: "..." }.
-//   This avoids Replit proxy / browser iframe blocking of 4xx/5xx responses.
+// Orchestrates the modular import pipeline. Each stage is handled by a
+// dedicated module — no platform-specific logic lives here.
 //
 // Request body:
-//   platformName       — Firestore document ID (used for logging only)
-//   platformConfig     — Full platform config object
+//   platformName   — Firestore document ID (used for logging & normalisation)
+//   platformConfig — Full platform config object (from Firestore / Admin UI)
 //
 // Response (always HTTP 200):
 //   { success: true,  offers, totalOffers, duration }
 //   { success: false, error: "..." }
+
+import { createLogger }          from './modules/logger.js';
+import { validatePlatformConfig } from './modules/validationEngine.js';
+import { buildRequest }           from './modules/requestBuilder.js';
+import { executeRequest }         from './modules/httpClient.js';
+import { detectResponseType }     from './modules/responseDetector.js';
+import { parseResponseBody, extractOffersArray } from './modules/responseParser.js';
+import { normalizeOffers }        from './modules/normalizer.js';
 
 export default async function handler(req, res) {
   // ── CORS: reflect Origin so null-origin iframes (Replit preview) are allowed
@@ -22,227 +29,107 @@ export default async function handler(req, res) {
   res.setHeader('Vary', 'Origin');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST') return res.status(200).json({ success: false, error: 'Method not allowed — use POST' });
+  if (req.method !== 'POST') {
+    return res.status(200).json({ success: false, error: 'Method not allowed — use POST' });
+  }
 
   const startTime = Date.now();
-  const DIAG = (stage, status, detail) =>
-    console.log(`[import-platform] STAGE ${stage} ${status} | ${detail}`);
+  const log = createLogger('import-platform');
 
-  DIAG('0', 'START', `handler invoked at ${new Date().toISOString()}`);
+  log.stage('0', 'START', `handler invoked at ${new Date().toISOString()}`);
 
   try {
     const { platformName, platformConfig } = req.body;
 
-    // ── STAGE 1: Validate request ─────────────────────────────────────────────
-    if (!platformConfig) {
-      DIAG('1', 'FAILED', 'Missing platformConfig in request body');
-      return res.status(200).json({ success: false, error: 'Missing platformConfig. The frontend must pass the platform configuration in the request body.' });
+    // ── STAGE 1: Validate ────────────────────────────────────────────────────
+    const validation = validatePlatformConfig(platformConfig);
+    if (!validation.valid) {
+      log.stage('1', 'FAILED', validation.error);
+      return res.status(200).json({ success: false, error: validation.error });
     }
 
-    DIAG('1', 'REQUEST', JSON.stringify({
-      platformName: platformName || '(unnamed)',
-      hasApiBase: !!platformConfig.apiBase,
-      hasApiKey: !!platformConfig.apiKey,
-      authenticationType: platformConfig.authenticationType,
-      requestMethod: platformConfig.requestMethod,
-      responsePath: platformConfig.responsePath,
+    const config = validation.config;
+    config.displayName = config.displayName || platformName || 'Platform';
+
+    log.stage('1', 'REQUEST', JSON.stringify({
+      platformName:       platformName || '(unnamed)',
+      hasApiBase:         !!config.apiBase,
+      hasApiKey:          !!config.apiKey,
+      authenticationType: config.authenticationType,
+      requestMethod:      config.requestMethod,
+      responsePath:       config.responsePath,
     }));
 
-    // ── STAGE 2: Extract config from request body ─────────────────────────────
-    const enabled            = platformConfig.enabled !== false;
-    const apiBase            = String(platformConfig.apiBase            || '').trim();
-    const endpoint           = String(platformConfig.endpoint           || '').trim();
-    const apiKey             = String(platformConfig.apiKey             || '').trim();
-    const authenticationType = String(platformConfig.authenticationType || 'queryParam');
-    const apiKeyParam        = String(platformConfig.apiKeyParam        || 'api_key');
-    const apiKeyHeaderName   = String(platformConfig.apiKeyHeaderName   || 'X-API-Key');
-    const basicAuthUser      = String(platformConfig.basicAuthUser      || '');
-    const requestMethod      = String(platformConfig.requestMethod      || 'GET').toUpperCase();
-    const customHeaders      = (typeof platformConfig.headers === 'object' && platformConfig.headers) ? platformConfig.headers : {};
-    const queryParameters    = (typeof platformConfig.queryParameters === 'object' && platformConfig.queryParameters) ? platformConfig.queryParameters : {};
-    const responsePath       = String(platformConfig.responsePath       || 'offers');
-    const offerMapping       = (typeof platformConfig.offerMapping === 'object' && platformConfig.offerMapping) ? platformConfig.offerMapping : {};
-    const displayName        = String(platformConfig.displayName        || platformName || 'Platform');
-
-    // Pagination sub-config
-    const pag             = (typeof platformConfig.pagination === 'object' && platformConfig.pagination) ? platformConfig.pagination : {};
-    const pagEnabled      = !!pag.enabled;
-    const pagLimitParam   = String(pag.limitParam || 'limit');
-    const pagLimit        = Number(pag.limit || 50) || 50;
-
-    DIAG('2', 'CONFIG', JSON.stringify({
-      enabled, apiBase: apiBase || '(empty)', endpoint: endpoint || '(empty)',
-      hasApiKey: !!apiKey, authenticationType, requestMethod, responsePath, displayName,
-    }));
-
-    if (!enabled) {
-      DIAG('2', 'DISABLED', 'Platform is disabled');
-      return res.status(200).json({ success: false, error: 'Platform is disabled' });
+    // ── STAGE 2: Build request ───────────────────────────────────────────────
+    const built = buildRequest(config);
+    if (!built.ok) {
+      log.stage('2', 'FAILED', built.error);
+      return res.status(200).json({ success: false, error: built.error });
     }
 
-    if (!apiBase) {
-      DIAG('2', 'FAILED', 'apiBase is empty — platform not fully configured');
-      return res.status(200).json({ success: false, error: 'Missing API Base URL in platform configuration. Edit the platform and set the API Base URL.' });
+    log.stage('2', 'API_REQUEST', `${config.requestMethod} ${built.logUrl} auth=${config.authenticationType}`);
+
+    // ── STAGE 3: Execute HTTP request ────────────────────────────────────────
+    const fetched = await executeRequest(built.url, config.requestMethod, built.headers);
+    if (!fetched.ok) {
+      log.stage('3', 'NETWORK_ERROR', fetched.error);
+      return res.status(200).json({ success: false, error: fetched.error });
     }
 
-    // ── STAGE 3: Build external API URL ───────────────────────────────────────
-    let fullUrl;
-    try {
-      fullUrl = new URL(`${apiBase}${endpoint}`);
-    } catch {
-      DIAG('3', 'FAILED', `Invalid URL: ${apiBase}${endpoint}`);
-      return res.status(200).json({ success: false, error: `Invalid API Base URL: ${apiBase}${endpoint}` });
-    }
+    const { response } = fetched;
+    log.stage('3', 'API_RESPONSE', `HTTP ${response.status} ${response.statusText}`);
 
-    // Append configured query parameters
-    for (const [k, v] of Object.entries(queryParameters)) {
-      if (v !== null && v !== undefined && v !== '') {
-        fullUrl.searchParams.set(k, String(v));
-      }
-    }
-
-    // Append pagination param
-    if (pagEnabled) {
-      fullUrl.searchParams.set(pagLimitParam, String(pagLimit));
-    }
-
-    // Build headers
-    const headers = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      ...customHeaders,
-    };
-
-    // Apply authentication
-    switch (authenticationType) {
-      case 'bearer':
-        headers['Authorization'] = `Bearer ${apiKey}`;
-        break;
-      case 'apiKeyHeader':
-        headers[apiKeyHeaderName] = apiKey;
-        break;
-      case 'basicAuth': {
-        const encoded = Buffer.from(`${basicAuthUser}:${apiKey}`).toString('base64');
-        headers['Authorization'] = `Basic ${encoded}`;
-        break;
-      }
-      case 'queryParam':
-      default:
-        if (apiKey) fullUrl.searchParams.set(apiKeyParam, apiKey);
-        break;
-    }
-
-    const logUrl = apiKey ? fullUrl.toString().replace(apiKey, '***KEY***') : fullUrl.toString();
-    DIAG('3', 'API_REQUEST', `${requestMethod} ${logUrl} auth=${authenticationType}`);
-
-    // ── STAGE 4: Call external platform API ───────────────────────────────────
-    let apiResponse;
-    try {
-      apiResponse = await fetch(fullUrl.toString(), { method: requestMethod, headers });
-    } catch (networkErr) {
-      const msg = `Network error reaching ${apiBase}: ${networkErr.message}`;
-      DIAG('4', 'NETWORK_ERROR', msg);
+    if (!response.ok) {
+      const body = await response.text();
+      const msg  = `Platform API returned ${response.status}: ${body.slice(0, 300)}`;
+      log.stage('3', 'FAILED', msg);
       return res.status(200).json({ success: false, error: msg });
     }
 
-    DIAG('4', 'API_RESPONSE', `HTTP ${apiResponse.status} ${apiResponse.statusText}`);
-
-    if (!apiResponse.ok) {
-      const body = await apiResponse.text();
-      const msg = `Platform API returned ${apiResponse.status}: ${body.slice(0, 300)}`;
-      DIAG('4', 'FAILED', msg);
-      return res.status(200).json({ success: false, error: msg });
+    // ── STAGE 4: Detect response type ────────────────────────────────────────
+    const detection = detectResponseType(response);
+    if (!detection.isJson) {
+      log.stage('4', 'WARN', `Non-JSON Content-Type detected — attempting parse anyway. ${detection.hint}`);
     }
 
-    let rawData;
-    try {
-      rawData = await apiResponse.json();
-    } catch {
-      const msg = 'Platform API returned non-JSON response';
-      DIAG('4', 'FAILED', msg);
-      return res.status(200).json({ success: false, error: msg });
+    // ── STAGE 5: Parse response body ─────────────────────────────────────────
+    const parsed = await parseResponseBody(response);
+    if (!parsed.ok) {
+      log.stage('5', 'FAILED', parsed.error);
+      return res.status(200).json({ success: false, error: parsed.error });
     }
 
-    DIAG('4', 'SUCCESS', `Received JSON. Top-level keys: ${Object.keys(rawData).join(', ')}`);
+    log.stage('5', 'SUCCESS', `Received JSON. Top-level keys: ${Object.keys(parsed.rawData).join(', ')}`);
 
-    // ── STAGE 5: Extract offers array via responsePath ─────────────────────────
-    let offers = rawData;
-    for (const part of responsePath.split('.')) {
-      if (offers && typeof offers === 'object' && part in offers) {
-        offers = offers[part];
-      } else {
-        offers = null;
-        break;
-      }
+    // ── STAGE 6: Extract offers array ────────────────────────────────────────
+    const { offers: rawOffers, usedFallback } = extractOffersArray(parsed.rawData, config.responsePath);
+
+    if (usedFallback) {
+      log.stage('6', 'FALLBACK', `responsePath="${config.responsePath}" did not yield an array — used envelope fallback`);
     }
 
-    if (!Array.isArray(offers)) {
-      DIAG('5', 'FALLBACK', `responsePath="${responsePath}" did not yield an array — trying common envelope keys`);
-      offers =
-        rawData.offers    ??
-        rawData.data      ??
-        rawData.results   ??
-        rawData.campaigns ??
-        rawData.items     ??
-        (Array.isArray(rawData) ? rawData : []);
-    }
+    log.stage('6', 'OFFERS', `Found ${rawOffers.length} raw offers`);
 
-    DIAG('5', 'OFFERS', `Found ${Array.isArray(offers) ? offers.length : 'NON-ARRAY'} offers via responsePath="${responsePath}"`);
-
-    // ── STAGE 6: Map offers to normalised shape ────────────────────────────────
-    const defaultMapping = {
-      id: 'id', title: 'name', description: 'description',
-      payout: 'payout', url: 'url', image: 'image',
-      category: 'category', countries: 'countries', devices: 'devices',
-    };
-    const mapping = { ...defaultMapping, ...offerMapping };
-
-    const getField = (obj, path) => {
-      if (!path) return undefined;
-      let cur = obj;
-      for (const p of String(path).split('.')) {
-        if (cur == null) return undefined;
-        cur = cur[p];
-      }
-      return cur;
-    };
-
-    const normalised = [];
-    for (const offer of (Array.isArray(offers) ? offers : [])) {
-      const rawId      = getField(offer, mapping.id) ?? offer.id ?? offer.offer_id;
-      const externalId = rawId !== undefined && rawId !== null ? String(rawId) : '';
-      if (!externalId) continue;
-
-      const title       = String(getField(offer, mapping.title)       ?? offer.name  ?? offer.title  ?? offer.offer_name ?? 'Untitled Offer');
-      const description = String(getField(offer, mapping.description) ?? offer.description ?? offer.requirements ?? '');
-      const payoutRaw   = getField(offer, mapping.payout) ?? offer.payout ?? offer.reward ?? offer.amount ?? 0;
-      const payout      = Math.max(0, parseFloat(String(payoutRaw)) || 0);
-      const taskUrl     = String(getField(offer, mapping.url) ?? offer.url ?? offer.link ?? offer.offer_url ?? '');
-
-      normalised.push({
-        externalId,
-        title,
-        description,
-        payout,
-        url: taskUrl,
-        platform: displayName,
-        platformId: platformName || displayName,
-        _raw: offer,
-      });
-    }
+    // ── STAGE 7: Normalise offers ────────────────────────────────────────────
+    const normalised = normalizeOffers(
+      rawOffers,
+      config.offerMapping,
+      platformName || config.displayName,
+      config.displayName,
+    );
 
     const duration = Date.now() - startTime;
-    DIAG('6', 'DONE', `Normalised ${normalised.length} offers in ${duration}ms`);
+    log.stage('7', 'DONE', `Normalised ${normalised.length} offers in ${duration}ms`);
 
     return res.status(200).json({
-      success: true,
-      offers: normalised,
+      success:     true,
+      offers:      normalised,
       totalOffers: normalised.length,
       duration,
     });
 
   } catch (error) {
-    console.error('[import-platform] UNHANDLED ERROR:', error);
+    log.error('UNHANDLED ERROR', error);
     return res.status(200).json({ success: false, error: String(error.message || error) });
   }
 }
