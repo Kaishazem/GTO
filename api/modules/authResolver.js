@@ -55,7 +55,12 @@ export function applyAuthentication(url, headers, config) {
 
     case 'queryParam':
     default:
-      if (apiKey && apiKeyParam) url.searchParams.set(apiKeyParam, apiKey);
+      // Only set the auth param if it is NOT already present in the URL
+      // (queryParameters in config may already supply it under the same key,
+      //  and we must not overwrite a manually configured private-key param).
+      if (apiKey && apiKeyParam && !url.searchParams.has(apiKeyParam)) {
+        url.searchParams.set(apiKeyParam, apiKey);
+      }
       break;
   }
 }
