@@ -3,6 +3,20 @@
 
 const VALID_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 
+/**
+ * Strip surrounding quote characters that users sometimes accidentally include
+ * when entering values in the Admin UI (e.g. "key" → key, 'value' → value).
+ * Only removes ONE pair of matching outer quotes.
+ */
+function stripQuotes(str) {
+  if (!str || str.length < 2) return str;
+  if ((str[0] === '"'  && str[str.length - 1] === '"')  ||
+      (str[0] === "'"  && str[str.length - 1] === "'")) {
+    return str.slice(1, -1);
+  }
+  return str;
+}
+
 const VALID_AUTH_TYPES = new Set([
   'bearer', 'jwt', 'apiKeyHeader', 'queryParam', 'basicAuth', 'customHeaders', 'none',
 ]);
@@ -36,11 +50,11 @@ export function validatePlatformConfig(raw) {
     enabled,
     apiBase,
     endpoint:           String(raw.endpoint           || '').trim(),
-    apiKey:             String(raw.apiKey             || '').trim(),
+    apiKey:             stripQuotes(String(raw.apiKey             || '').trim()),
     authenticationType,
-    apiKeyParam:        String(raw.apiKeyParam        || 'api_key'),
-    apiKeyHeaderName:   String(raw.apiKeyHeaderName   || 'X-API-Key'),
-    basicAuthUser:      String(raw.basicAuthUser      || ''),
+    apiKeyParam:        stripQuotes(String(raw.apiKeyParam        || 'api_key').trim()),
+    apiKeyHeaderName:   stripQuotes(String(raw.apiKeyHeaderName   || 'X-API-Key').trim()),
+    basicAuthUser:      stripQuotes(String(raw.basicAuthUser      || '').trim()),
     extraAuthHeaders:   (typeof raw.extraAuthHeaders === 'object' && raw.extraAuthHeaders) ? raw.extraAuthHeaders : {},
     requestMethod,
     customHeaders:      (typeof raw.headers === 'object' && raw.headers)                           ? raw.headers           : {},

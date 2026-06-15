@@ -136,6 +136,18 @@ export default defineConfig({
     host: "0.0.0.0",
     port: 5000,
     allowedHosts: true,
+    watch: {
+      // Exclude agent-state, skills, and package directories from the file
+      // watcher so that changes to those files do not trigger HMR page reloads.
+      // Without this exclusion, every agent action (writing logs, skill files,
+      // memory) fires a reload and aborts any in-flight API fetch (NetworkError).
+      ignored: [
+        '**/.local/**',
+        '**/.agents/**',
+        '**/node_modules/**',
+        '**/.git/**',
+      ],
+    },
   },
   build: {
     chunkSizeWarningLimit: 1600,
