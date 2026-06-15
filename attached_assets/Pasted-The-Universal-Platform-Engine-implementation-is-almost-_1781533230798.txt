@@ -1,0 +1,70 @@
+The Universal Platform Engine implementation is almost complete.
+
+There is now only one remaining issue.
+
+Current behavior:
+
+CPAGrip Test Connection fails with:
+
+"Platform API returned non-JSON response.
+Body starts with:
+Your private key must be used to enable the showall parameter."
+
+Do NOT assume the cause.
+
+Instead, diagnose it by tracing the complete request construction process.
+
+Specifically:
+
+1. Print the COMPLETE final request URL immediately before the HTTP request is sent.
+
+2. Print every final query parameter individually after ALL processing is complete, including:
+   - key
+   - pubkey
+   - user_id
+   - showall
+   - any authentication parameters
+   - any automatically added parameters
+
+3. Print the authentication type selected by the engine.
+
+4. Print the final request headers.
+
+5. Compare the final request against CPAGrip's official Offer Feed API requirements.
+
+Then identify exactly where the request becomes incorrect.
+
+Check the entire generic request pipeline:
+
+- requestBuilder.js
+- authResolver.js
+- httpClient.js
+
+Verify that:
+
+- requestBuilder correctly builds the URL.
+- authResolver does not overwrite, rename or duplicate existing query parameters.
+- authentication is applied only once.
+- queryParameters and authentication parameters merge correctly.
+- no legacy field is overriding the new configuration.
+- no cached configuration is being used.
+
+Do NOT create any CPAGrip-specific workaround.
+
+Fix the generic engine so ALL platforms using Query Parameter authentication work correctly.
+
+If the bug is inside authResolver, fix authResolver.
+
+If the bug is inside requestBuilder, fix requestBuilder.
+
+If the bug is inside configuration loading, fix the configuration loader.
+
+After implementing the fix:
+
+1. Restart the development server if necessary.
+2. Run Test Connection again.
+3. Show the final request URL.
+4. Show the response received from CPAGrip.
+5. Confirm that Test Connection succeeds.
+
+Do not finish until you have verified that the request matches CPAGrip's API requirements and the Test Connection works successfully.
