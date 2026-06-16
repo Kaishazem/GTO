@@ -18,7 +18,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   collection, addDoc, getDocs, updateDoc, doc, deleteDoc, setDoc,
-  serverTimestamp, Timestamp, increment, getDoc, query, where
+  serverTimestamp, Timestamp, increment, getDoc, query, where, onSnapshot
 } from "firebase/firestore";
 import { db, auth } from "@/lib/firebase";
 import { Task } from "@/contexts/TaskContext";
@@ -470,6 +470,8 @@ export default function AdminPage() {
   const [resetting, setResetting] = useState(false);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
 
+  const [taskSubTab, setTaskSubTab] = useState<"add" | "list" | "reviews" | "financial">("list");
+
   // Withdrawal filter / search / bulk / modals
   const [wFilter, setWFilter] = useState<"all" | "pending" | "approved" | "rejected">("pending");
   const [wSearch, setWSearch] = useState("");
@@ -490,9 +492,6 @@ export default function AdminPage() {
     if (authLoading || !profile) return;
     if (profile.role !== "admin") { setLocation("/dashboard"); return; }
     fetchAllWithdrawals();
-    fetchTasks();
-    fetchManualCompletions();
-    fetchPlatforms();
     fetchAdminAlerts();
     getSettings().then((s) => {
       setWithdrawalInstructionText(s.withdrawalInstructionText || "");
@@ -547,6 +546,164 @@ export default function AdminPage() {
       }
     })();
   }, [authLoading, profile]);
+
+  // Real-time: tasks
+  useEffect(() => {
+    if (!profile || profile.role !== "admin") return;
+    setTasksLoading(true);
+    const unsub = onSnapshot(collection(db, "tasks"), (snap) => {
+      const fetched: Task[] = snap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as Omit<Task, "id" | "createdAt">),
+        networkStatus: (d.data().networkStatus as Task["networkStatus"]) || "pending",
+        createdAt: (d.data().createdAt as Timestamp)?.toDate() || new Date(),
+      }));
+      fetched.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+      setTasks(fetched);
+      setTasksLoading(false);
+    });
+    return () => unsub();
+  }, [profile?.role]);
+
+  // Real-time: platforms
+  useEffect(() => {
+    if (!profile || profile.role !== "admin") return;
+    setLoadingPlatforms(true);
+    const unsub = onSnapshot(collection(db, "platforms"), (snap) => {
+      const fetched: ManagedPlatform[] = snap.docs.map((d) => {
+        const data = d.data();
+        const sv = (k: string) => String(data[k] || "");
+        const nv = (k: string, def = 0) => Number(data[k] || def);
+        const bv = (k: string, def = true) => data[k] !== false && data[k] !== undefined ? (data[k] === false ? false : def) : def;
+        let resolvedApiBase  = sv("apiBase");
+        let resolvedEndpoint = sv("endpoint");
+        let resolvedAuthType = sv("authenticationType") || "queryParam";
+        let resolvedApiKey   = sv("apiKey") || sv("adgemApiKey") || sv("lootablyApiKey") || sv("cpabuildApiKey") || sv("monetizerApiKey") || sv("cpagripApiKey");
+        let resolvedQueryParams: Record<string, string> = (data.queryParameters as Record<string, string>) || {};
+        let resolvedResponsePath = sv("responsePath") || "offers";
+        if (!resolvedApiBase) {
+          const adgemKey   = sv("adgemApiKey");
+          const adgemAppId = sv("adgemAppId");
+          if (adgemKey && adgemAppId) {
+            resolvedApiBase   = "https://api.adgem.com/v1";
+            resolvedEndpoint  = "/offers";
+            resolvedAuthType  = "bearer";
+            resolvedResponsePath = "offers";
+            resolvedQueryParams  = { ...resolvedQueryParams, app_id: adgemAppId };
+          }
+          const lootablyKey = sv("lootablyApiKey");
+          if (!resolvedApiBase && lootablyKey) {
+            resolvedApiBase  = "https://lootably.com/api";
+            resolvedEndpoint = "/placements/poll";
+            resolvedAuthType = "apiKeyHeader";
+            resolvedResponsePath = "offers";
+          }
+        }
+        return {
+          id: d.id,
+          name: sv("name"),
+          displayName: sv("displayName") || sv("name"),
+          enabled: data.enabled !== false,
+          apiBase: resolvedApiBase,
+          endpoint: resolvedEndpoint,
+          authenticationType: resolvedAuthType as ManagedPlatform["authenticationType"],
+          apiKey: resolvedApiKey,
+          apiKeyParam: sv("apiKeyParam") || "api_key",
+          apiKeyHeaderName: sv("apiKeyHeaderName") || "X-API-Key",
+          basicAuthUser: sv("basicAuthUser"),
+          requestMethod: (sv("requestMethod") || "GET") as ManagedPlatform["requestMethod"],
+          headers: (data.headers as Record<string, string>) || {},
+          queryParameters: resolvedQueryParams,
+          responsePath: resolvedResponsePath,
+          offerMapping: (data.offerMapping as Record<string, string>) || {},
+          postbackUrl: sv("postbackUrl"),
+          autoImport: bv("autoImport", false),
+          importInterval: nv("importInterval", 30),
+          rateLimit: nv("rateLimit", 60),
+          importStatus: data.importStatus as ManagedPlatform["importStatus"],
+          lastImportAt: sv("lastImportAt") || undefined,
+          lastImportCount: data.lastImportCount !== undefined ? Number(data.lastImportCount) : undefined,
+          totalOffersFound: data.totalOffersFound !== undefined ? Number(data.totalOffersFound) : undefined,
+          lastImportDurationMs: data.lastImportDurationMs !== undefined ? Number(data.lastImportDurationMs) : undefined,
+          lastError: sv("lastError") || undefined,
+          createdAt: (data.createdAt as Timestamp)?.toDate() || new Date(),
+        };
+      });
+      fetched.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+      setPlatforms(fetched);
+      setLoadingPlatforms(false);
+    });
+    return () => unsub();
+  }, [profile?.role]);
+
+  // Real-time: manual task completions
+  useEffect(() => {
+    if (!profile || profile.role !== "admin") return;
+    setLoadingManualCompletions(true);
+    const tasksCache = new Map<string, Record<string, unknown>>();
+    const usersCache = new Map<string, Record<string, unknown>>();
+
+    const unsubCompletions = onSnapshot(collection(db, "taskCompletions"), async (snap) => {
+      const newTaskIds = new Set<string>();
+      const newUserIds = new Set<string>();
+      snap.docs.forEach((d) => {
+        const raw = d.data() as Record<string, unknown>;
+        if (raw.taskId) newTaskIds.add(String(raw.taskId));
+        if (raw.userId) newUserIds.add(String(raw.userId));
+      });
+
+      const missingTasks = [...newTaskIds].filter((id) => !tasksCache.has(id));
+      const missingUsers = [...newUserIds].filter((id) => !usersCache.has(id));
+      await Promise.all([
+        ...missingTasks.map(async (id) => {
+          const d = await getDoc(doc(db, "tasks", id));
+          if (d.exists()) tasksCache.set(id, d.data() as Record<string, unknown>);
+        }),
+        ...missingUsers.map(async (id) => {
+          const d = await getDoc(doc(db, "users", id));
+          if (d.exists()) usersCache.set(id, d.data() as Record<string, unknown>);
+        }),
+      ]);
+
+      const fetched: ManualTaskCompletion[] = snap.docs
+        .filter((d) => {
+          const raw = d.data() as Record<string, unknown>;
+          const taskData = tasksCache.get(String(raw.taskId || ""));
+          return isManualCompletion(raw, taskData);
+        })
+        .map((d) => {
+          const raw = d.data() as Record<string, unknown>;
+          const userData = usersCache.get(String(raw.userId || ""));
+          const taskData = tasksCache.get(String(raw.taskId || ""));
+          const shareFromTask =
+            typeof taskData?.manualUserSharePercent === "number"
+              ? (taskData.manualUserSharePercent as number)
+              : typeof raw.manualUserSharePercent === "number"
+              ? (raw.manualUserSharePercent as number)
+              : 100;
+          return {
+            id: d.id,
+            taskId: String(raw.taskId || ""),
+            taskTitle: String(raw.taskTitle || taskData?.title || "Untitled Task"),
+            taskDescription: String(raw.taskDescription || taskData?.description || ""),
+            userId: String(raw.userId || ""),
+            userName: String(raw.userName || userData?.name || "Unknown"),
+            userEmail: String(raw.userEmail || userData?.email || ""),
+            reward: Number(raw.reward || 0),
+            adminReward: Number(raw.adminReward ?? raw.reward ?? 0),
+            manualUserSharePercent: shareFromTask,
+            status: (raw.status as ManualTaskCompletion["status"]) || "pending",
+            submittedAt: (raw.completedAt as Timestamp)?.toDate() || new Date(),
+          };
+        });
+
+      fetched.sort((a, b) => b.submittedAt.getTime() - a.submittedAt.getTime());
+      setManualCompletions(fetched);
+      setLoadingManualCompletions(false);
+    });
+
+    return () => unsubCompletions();
+  }, [profile?.role]);
 
   async function fetchManualCompletions() {
     setLoadingManualCompletions(true);
@@ -2830,6 +2987,17 @@ export default function AdminPage() {
       {/* === TASKS === */}
       {tab === "tasks" && (
         <div className="space-y-4">
+          <div className="flex gap-2 flex-wrap">
+            {(["add", "list", "reviews", "financial"] as const).map((s) => (
+              <button key={s} onClick={() => setTaskSubTab(s)}
+                className={cn("px-3 py-1.5 rounded-lg text-xs font-medium transition-all",
+                  taskSubTab === s ? "bg-white/15 text-white" : "bg-white/5 text-white/50 hover:bg-white/10")}>
+                {s === "add" ? "Add New Task" : s === "list" ? `Task List (${tasks.length})` : s === "reviews" ? `Reviews (${manualCompletions.length})` : "Financial"}
+              </button>
+            ))}
+          </div>
+
+          {taskSubTab === "add" && (
           <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
             <h2 className="font-semibold text-white mb-4 flex items-center gap-2"><Plus className="w-4 h-4 text-emerald-400" />Add New Task (Manual)</h2>
             <div className="grid gap-3">
@@ -2868,7 +3036,9 @@ export default function AdminPage() {
               </Button>
             </div>
           </div>
+          )}
 
+          {taskSubTab === "list" && (
           <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
             <h2 className="font-semibold text-white mb-4">Task List ({tasks.length})</h2>
             {tasksLoading ? <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin text-emerald-400" /></div>
@@ -2930,8 +3100,9 @@ export default function AdminPage() {
                 })}</div>
             }
           </div>
+          )}
 
-          {/* ── SECTION 2: MANUAL TASK REVIEWS ── */}
+          {taskSubTab === "reviews" && (
           <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
             <div className="flex items-center justify-between mb-4 gap-3">
               <h2 className="font-semibold text-white flex items-center gap-2">
@@ -3020,9 +3191,10 @@ export default function AdminPage() {
               </div>
             )}
           </div>
+          )}
 
-          {/* ── SECTION 3: FINANCIAL DASHBOARD ── */}
-          {(() => {
+          {taskSubTab === "financial" && (
+          <>{(() => {
             const approvedManual = manualCompletions.filter(c => c.status === "approved");
             const blockA = approvedManual.filter(c => c.manualUserSharePercent >= 100);
             const blockB = approvedManual.filter(c => c.manualUserSharePercent < 100);
@@ -3075,7 +3247,8 @@ export default function AdminPage() {
                 </div>
               </div>
             );
-          })()}
+          })()}</>
+          )}
         </div>
       )}
 

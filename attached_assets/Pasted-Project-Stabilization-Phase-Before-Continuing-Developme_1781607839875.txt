@@ -1,0 +1,177 @@
+Project Stabilization Phase (Before Continuing Development)
+
+The Universal Platform Engine is now working correctly.
+
+Verified:
+
+- Universal modular engine implemented.
+- CPAGrip Test Connection succeeds (917 offers imported).
+- AdGem integration remains compatible.
+- Import Now works.
+- Firestore integration works.
+- Universal request/response engine is working.
+
+Do NOT redesign or rewrite the engine.
+
+This phase is ONLY about stabilizing the project before continuing with new features.
+
+==================================================
+TASK 1 — Real-time UI Updates
+
+Currently many counters and lists require manual refresh.
+
+Implement a centralized realtime update system using Firestore listeners.
+
+Requirements:
+
+- No manual page refresh.
+- No window reload.
+- No polling.
+- No duplicate listeners.
+- Prevent memory leaks.
+
+Use Firestore realtime listeners.
+
+The following must update automatically:
+
+- Simple Tasks counter
+- Premium Tasks counter
+- Pending Reviews counter
+- Published Tasks counter
+- Hidden Tasks counter
+- Draft Tasks counter
+- User balances
+- User points
+- Task approval status
+- Imported task list
+- Manual task list
+- Platform statistics
+- Dashboard statistics
+
+Whenever:
+
+- Import finishes
+- Task approved
+- Task rejected
+- Task edited
+- Task deleted
+- Balance changes
+- User completes task
+
+The UI must immediately update.
+
+==================================================
+TASK 2 — Admin Panel Layout
+
+Improve ONLY the Admin UI layout.
+
+Current sections:
+
+- Add New Task
+- Task List
+- Manual
+- Task Reviews
+
+Currently they appear vertically.
+
+Convert them into responsive horizontal Tabs.
+
+Requirements:
+
+- Responsive
+- Mobile friendly
+- Desktop friendly
+
+Do NOT change functionality.
+Do NOT rename sections.
+Do NOT break routing.
+Do NOT modify business logic.
+
+Only improve layout.
+
+==================================================
+TASK 3 — Reduce Vercel Serverless Functions
+
+Current deployment fails because Vercel Hobby allows only 12 Serverless Functions.
+
+Refactor ONLY the API routing.
+
+Keep ALL existing endpoints working.
+
+Do NOT remove features.
+
+IMPORTANT:
+
+Do NOT merge everything into one huge file.
+
+Keep the modular architecture.
+
+Keep all shared logic inside api/modules/.
+
+Only consolidate the Vercel entry-point handlers.
+
+Maintain readability and maintainability.
+
+The frontend must continue calling exactly the same URLs.
+
+Examples:
+
+/api/import-platform
+/api/postback
+/api/tasks
+/api/platforms
+
+must continue working exactly as before.
+
+Reduce the number of Serverless Functions below the Vercel Hobby limit.
+
+==================================================
+Git Safety
+
+Before making structural changes:
+
+- Create a git commit or checkpoint.
+- Perform the refactor incrementally.
+- If any regression appears, fix it before continuing.
+
+Never leave the project in a partially working state.
+
+==================================================
+Compatibility Requirements
+
+Do NOT break:
+
+- Universal Platform Engine
+- CPAGrip
+- AdGem
+- Future platforms
+- Firestore
+- Firebase Authentication
+- Admin Panel
+- Existing APIs
+- Replit Development
+- Vercel Production
+
+==================================================
+Verification
+
+Before finishing:
+
+Run:
+
+npm run build
+
+Verify:
+
+- Build succeeds
+- No TypeScript errors
+- No lint errors
+- Realtime updates work
+- Counters update automatically
+- Admin Tabs work
+- CPAGrip Test Connection still succeeds
+- Import Now still succeeds
+- Existing endpoints still function
+- Total Serverless Functions are below the Vercel Hobby limit
+
+Do NOT finish until every verification item passes successfully.

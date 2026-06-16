@@ -15,13 +15,13 @@
 const _buster = new URL(import.meta.url).searchParams.get('t') || '';
 const _s      = _buster ? `?t=${_buster}` : '';   // suffix, e.g. "?t=1718000000000"
 
-const { createLogger }                    = await import(`./modules/logger.js${_s}`);
-const { validatePlatformConfig }           = await import(`./modules/validationEngine.js${_s}`);
-const { buildRequest }                     = await import(`./modules/requestBuilder.js${_s}`);
-const { executeRequest }                   = await import(`./modules/httpClient.js${_s}`);
-const { detectResponseType }               = await import(`./modules/responseDetector.js${_s}`);
-const { parseBodyText, extractOffersArray }= await import(`./modules/responseParser.js${_s}`);
-const { normalizeOffers }                  = await import(`./modules/normalizer.js${_s}`);
+const { createLogger }                    = await import(`./_modules/logger.js${_s}`);
+const { validatePlatformConfig }           = await import(`./_modules/validationEngine.js${_s}`);
+const { buildRequest }                     = await import(`./_modules/requestBuilder.js${_s}`);
+const { executeRequest }                   = await import(`./_modules/httpClient.js${_s}`);
+const { detectResponseType }               = await import(`./_modules/responseDetector.js${_s}`);
+const { parseBodyText, extractOffersArray }= await import(`./_modules/responseParser.js${_s}`);
+const { normalizeOffers }                  = await import(`./_modules/normalizer.js${_s}`);
 
 // ── Handler ────────────────────────────────────────────────────────────────
 export default async function handler(req, res) {

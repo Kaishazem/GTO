@@ -13,6 +13,7 @@ import {
   increment,
   limit,
   startAfter,
+  onSnapshot,
   QueryDocumentSnapshot,
   DocumentData,
 } from "firebase/firestore";
@@ -227,15 +228,52 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     await refreshProfile();
   }
 
-  // Only fetch tasks when the user is authenticated — Firestore rules require auth
+  // Real-time listeners — auto-refresh tasks and completions whenever Firestore changes
   useEffect(() => {
-    if (user) {
-      fetchTasks();
-      fetchCompletions();
-    } else {
+    if (!user) {
       setTasks([]);
       setCompletions([]);
+      return;
     }
+    setLoading(true);
+
+    const tasksQ = query(collection(db, "tasks"), where("active", "==", true));
+    const unsubTasks = onSnapshot(tasksQ, (snap) => {
+      const fetched = snap.docs
+        .map(mapTask)
+        .filter((t) => t.networkStatus === "approved" && t.status === "published");
+      fetched.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+      setTasks(fetched);
+      setLastDoc(snap.docs[snap.docs.length - 1] || null);
+      setHasMore(snap.docs.length >= PAGE_SIZE);
+      setLoading(false);
+    });
+
+    const completionsQ = query(
+      collection(db, "taskCompletions"),
+      where("userId", "==", user.uid)
+    );
+    const unsubCompletions = onSnapshot(completionsQ, (snap) => {
+      const fetched: TaskCompletion[] = snap.docs.map((d) => ({
+        id: d.id,
+        taskId: d.data().taskId,
+        userId: d.data().userId,
+        completedAt: (d.data().completedAt as Timestamp)?.toDate() || new Date(),
+        reward: d.data().reward || 0,
+        status: d.data().status || "pending",
+        taskTitle: d.data().taskTitle,
+        taskDescription: d.data().taskDescription,
+        taskType: d.data().taskType,
+        verifiedBy: d.data().verifiedBy,
+      }));
+      fetched.sort((a, b) => b.completedAt.getTime() - a.completedAt.getTime());
+      setCompletions(fetched);
+    });
+
+    return () => {
+      unsubTasks();
+      unsubCompletions();
+    };
   }, [user]);
 
   return (

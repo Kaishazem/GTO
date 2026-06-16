@@ -207,6 +207,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setDeviceBanned(true);
             signOut(auth).catch(() => {});
           }
+          setProfile((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  balance: typeof userData.balance === "number" ? userData.balance : prev.balance,
+                  pendingBalance: typeof userData.pendingBalance === "number" ? userData.pendingBalance : prev.pendingBalance,
+                }
+              : prev
+          );
         }
       });
 

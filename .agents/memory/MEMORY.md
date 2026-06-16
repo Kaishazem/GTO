@@ -1,1 +1,3 @@
 - [import-platform handler auth](import-platform-auth.md) — handler must receive admin ID token to authenticate Firestore REST calls; 403 was silently treated as "not found"
+- [Vercel function count fix](vercel-modules-underscore.md) — api/modules/ renamed to api/_modules/ so Vercel excludes them from serverless function discovery; only import-platform.js uses these modules
+- [AdminPage real-time listeners](adminpage-realtime.md) — tasks, platforms, and taskCompletions all use onSnapshot in dedicated useEffects; fetchTasks/fetchManualCompletions/fetchPlatforms kept for compat but no longer called on mount
