@@ -1,11 +1,12 @@
 import { useState, useEffect } from "react";
-import { useTask } from "@/contexts/TaskContext";
+import { useTask, Task } from "@/contexts/TaskContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { formatCurrency, formatDate, userReward } from "@/lib/utils";
 import { getSettings } from "@/lib/settings";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Dialog,
   DialogContent,
@@ -13,7 +14,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
-import { ExternalLink, CheckCircle, Loader2, Zap, Star, History } from "lucide-react";
+import { ExternalLink, CheckCircle, Loader2, Zap, Star, History, Info, Clock, Building2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type MainTab = "all" | "simple" | "premium" | "history";
@@ -26,6 +27,7 @@ export default function TasksPage() {
   const [activityFilter, setActivityFilter] = useState<"all" | "pending" | "approved" | "rejected">("all");
   const [completing, setCompleting] = useState<string | null>(null);
   const [pendingConfirmTask, setPendingConfirmTask] = useState<{ id: string } | null>(null);
+  const [detailsTask, setDetailsTask] = useState<Task | null>(null);
   const [platformUserSharePercent, setPlatformUserSharePercent] = useState(65);
 
   useEffect(() => {
@@ -193,29 +195,32 @@ export default function TasksPage() {
                             Completed
                           </div>
                         ) : (
-                          <Button
-                            size="sm"
-                            disabled={isLoading}
-                            data-testid={`button-start-${task.id}`}
-                            onClick={() => handleStart(task.id, task.url)}
-                            className="bg-emerald-500 hover:bg-emerald-400 text-white rounded-xl"
-                          >
-                            {isLoading ? (
-                              <><Loader2 className="w-4 h-4 animate-spin mr-1" />Submitting...</>
-                            ) : (
-                              <><ExternalLink className="w-4 h-4 mr-1" />Start Task</>
-                            )}
-                          </Button>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              size="sm"
+                              disabled={isLoading}
+                              data-testid={`button-start-${task.id}`}
+                              onClick={() => handleStart(task.id, task.url)}
+                              className="bg-emerald-500 hover:bg-emerald-400 text-white rounded-xl"
+                            >
+                              {isLoading ? (
+                                <><Loader2 className="w-4 h-4 animate-spin mr-1" />Submitting...</>
+                              ) : (
+                                <><ExternalLink className="w-4 h-4 mr-1" />Start Task</>
+                              )}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              data-testid={`button-details-${task.id}`}
+                              onClick={() => setDetailsTask(task)}
+                              className="border-white/20 text-white/60 hover:text-white hover:bg-white/10 rounded-xl"
+                            >
+                              <Info className="w-4 h-4 mr-1" />
+                              View Details
+                            </Button>
+                          </div>
                         )}
-                        <a
-                          href={task.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-xs text-white/30 hover:text-white/60 transition-colors flex items-center gap-1"
-                        >
-                          <ExternalLink className="w-3 h-3" />
-                          Open link
-                        </a>
                       </div>
                     </div>
                   );
@@ -239,6 +244,81 @@ export default function TasksPage() {
           )}
         </>
       )}
+
+      {/* ── TASK DETAILS DIALOG ── */}
+      {detailsTask && (() => {
+        const dt = detailsTask;
+        const dtReward = (dt.taskType || "platform") === "manual"
+          ? userReward(dt.reward, "manual", {
+              manualUserSharePercent: dt.manualUserSharePercent,
+              manualAdminRate: dt.manualAdminRate,
+            })
+          : userReward(dt.reward, "platform", { platformUserSharePercent });
+        const hasDescription = !!dt.description?.trim();
+        const fallback = "Please carefully follow the instructions shown on the offer page.\n\nUsing duplicate accounts, fake information, VPNs (when prohibited), or failing to complete all requirements may result in your reward being rejected.";
+        return (
+          <Dialog open={!!detailsTask} onOpenChange={(open) => { if (!open) setDetailsTask(null); }}>
+            <DialogContent
+              className="bg-slate-900 border border-white/10 text-white max-w-md p-0 overflow-hidden"
+              data-testid="dialog-task-details"
+            >
+              <div className="p-6 pb-4 border-b border-white/10">
+                <div className="flex items-start gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap mb-2">
+                      <Badge className={cn("text-xs", dt.type === "premium"
+                        ? "bg-amber-500/20 text-amber-300 border-amber-500/30"
+                        : "bg-blue-500/20 text-blue-300 border-blue-500/30"
+                      )}>
+                        {dt.type === "premium" ? <><Star className="w-3 h-3 mr-1" />Premium</> : <><Zap className="w-3 h-3 mr-1" />Simple</>}
+                      </Badge>
+                    </div>
+                    <DialogTitle className="text-white text-lg leading-snug">{dt.title}</DialogTitle>
+                    <DialogDescription className="sr-only">Task details for {dt.title}</DialogDescription>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <div className="text-xl font-bold text-emerald-400">+{formatCurrency(dtReward)}</div>
+                    <div className="text-xs text-white/30">reward</div>
+                  </div>
+                </div>
+              </div>
+
+              <ScrollArea className="max-h-64">
+                <div className="px-6 py-4 space-y-4">
+                  {hasDescription ? (
+                    <div>
+                      <p className="text-xs font-semibold text-white/40 uppercase tracking-wide mb-1.5">Instructions</p>
+                      <p className="text-sm text-white/80 leading-relaxed whitespace-pre-line">{dt.description}</p>
+                    </div>
+                  ) : (
+                    <div>
+                      <p className="text-xs font-semibold text-white/40 uppercase tracking-wide mb-1.5">Instructions</p>
+                      <p className="text-sm text-white/60 leading-relaxed whitespace-pre-line">{fallback}</p>
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-2 pt-1 border-t border-white/5">
+                    <Building2 className="w-3.5 h-3.5 text-white/30 shrink-0" />
+                    <span className="text-xs text-white/40">Provided by</span>
+                    <span className="text-xs text-white/70 font-medium">{dt.platform}</span>
+                  </div>
+                </div>
+              </ScrollArea>
+
+              <div className="px-6 py-4 border-t border-white/10">
+                <Button
+                  data-testid={`button-details-start-${dt.id}`}
+                  onClick={() => { setDetailsTask(null); handleStart(dt.id, dt.url); }}
+                  className="bg-emerald-500 hover:bg-emerald-400 text-white rounded-xl w-full"
+                >
+                  <ExternalLink className="w-4 h-4 mr-2" />
+                  Start Task
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+        );
+      })()}
 
       {/* ── TASK COMPLETION CONFIRMATION DIALOG ── */}
       <Dialog

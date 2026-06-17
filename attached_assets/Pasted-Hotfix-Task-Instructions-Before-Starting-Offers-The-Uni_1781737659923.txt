@@ -1,0 +1,138 @@
+Hotfix – Task Instructions Before Starting Offers
+
+The Universal Platform Engine is working correctly.
+
+The new Start Task flow is also working correctly.
+
+Do NOT modify:
+
+- Universal Platform Engine
+- Import Engine
+- Firestore structure
+- Admin logic
+- Pending Balance
+- Start Task workflow
+- Platform APIs
+
+This task ONLY improves the user experience before starting an offer.
+
+---
+
+Problem
+
+Currently the user only sees:
+
+Task title
+
+Reward
+
+Start Task
+
+The user does not know:
+
+- What must be completed
+- Requirements
+- Restrictions
+- Estimated time
+- Important notes
+
+This causes unnecessary failed conversions.
+
+---
+
+Required Changes
+
+Before the user starts an offer, display a Task Details dialog.
+
+The dialog opens when the user clicks:
+
+View Details
+
+NOT when clicking Start Task.
+
+---
+
+Dialog Contents
+
+Display as much information as available from the imported platform.
+
+Preferred order:
+
+1. Offer Title
+
+2. Reward
+
+3. Description
+
+4. Instructions
+
+5. Requirements
+
+6. Estimated Completion Time (if available)
+
+7. Platform Name
+
+If a field does not exist, simply hide it.
+
+Do NOT invent information.
+
+---
+
+Start Task
+
+Inside the dialog place:
+
+Start Task
+
+Pressing this button must keep the existing behavior:
+
+- Open offer in a new browser tab.
+- Keep GTO open.
+- Continue using the existing confirmation workflow.
+
+Do NOT change the current Start Task implementation.
+
+---
+
+Fallback
+
+If the platform provides no instructions at all, show:
+
+"Please carefully follow the instructions shown on the offer page.
+
+Using duplicate accounts, fake information, VPNs (when prohibited), or failing to complete all requirements may result in your reward being rejected."
+
+---
+
+Compatibility
+
+Do NOT break:
+
+- CPAGrip
+- AdGem
+- Future platforms
+- Universal Platform Engine
+- Firestore
+- Existing task lifecycle
+- Realtime updates
+- Admin Panel
+
+---
+
+Verification
+
+Before finishing verify:
+
+✓ Imported descriptions are displayed when available.
+
+✓ Missing fields are hidden gracefully.
+
+✓ View Details opens correctly.
+
+✓ Start Task still works exactly as before.
+
+✓ Build succeeds.
+
+✓ No TypeScript errors.
+
+Do not finish until every verification item passes.
