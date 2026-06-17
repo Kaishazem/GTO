@@ -6,6 +6,13 @@ import { getSettings } from "@/lib/settings";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { ExternalLink, CheckCircle, Loader2, Zap, Star, History } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -18,6 +25,7 @@ export default function TasksPage() {
   const [tab, setTab] = useState<MainTab>("all");
   const [activityFilter, setActivityFilter] = useState<"all" | "pending" | "approved" | "rejected">("all");
   const [completing, setCompleting] = useState<string | null>(null);
+  const [pendingConfirmTask, setPendingConfirmTask] = useState<{ id: string } | null>(null);
   const [platformUserSharePercent, setPlatformUserSharePercent] = useState(65);
 
   useEffect(() => {
@@ -37,11 +45,15 @@ export default function TasksPage() {
     .filter((c) => activityFilter === "all" || c.status === activityFilter)
     .sort((a, b) => b.completedAt.getTime() - a.completedAt.getTime());
 
-  async function handleComplete(taskId: string, url: string) {
+  function handleStart(taskId: string, url: string) {
+    window.open(url, "_blank");
+    setPendingConfirmTask({ id: taskId });
+  }
+
+  async function handleConfirm(taskId: string) {
     setCompleting(taskId);
+    setPendingConfirmTask(null);
     try {
-      window.open(url, "_blank");
-      await new Promise((r) => setTimeout(r, 2000));
       await completeTask(taskId);
       toast({ title: "✅ Done!", description: "Task submitted — pending verification" });
     } catch (e: unknown) {
@@ -49,6 +61,10 @@ export default function TasksPage() {
     } finally {
       setCompleting(null);
     }
+  }
+
+  function handleDidNotComplete() {
+    setPendingConfirmTask(null);
   }
 
   const availableTasks = tasks.filter((t) => !completedIds.has(t.id));
@@ -180,14 +196,14 @@ export default function TasksPage() {
                           <Button
                             size="sm"
                             disabled={isLoading}
-                            data-testid={`button-complete-${task.id}`}
-                            onClick={() => handleComplete(task.id, task.url)}
+                            data-testid={`button-start-${task.id}`}
+                            onClick={() => handleStart(task.id, task.url)}
                             className="bg-emerald-500 hover:bg-emerald-400 text-white rounded-xl"
                           >
                             {isLoading ? (
-                              <><Loader2 className="w-4 h-4 animate-spin mr-1" />Completing...</>
+                              <><Loader2 className="w-4 h-4 animate-spin mr-1" />Submitting...</>
                             ) : (
-                              <><ExternalLink className="w-4 h-4 mr-1" />Complete Task</>
+                              <><ExternalLink className="w-4 h-4 mr-1" />Start Task</>
                             )}
                           </Button>
                         )}
@@ -223,6 +239,41 @@ export default function TasksPage() {
           )}
         </>
       )}
+
+      {/* ── TASK COMPLETION CONFIRMATION DIALOG ── */}
+      <Dialog
+        open={!!pendingConfirmTask}
+        onOpenChange={(open) => { if (!open) handleDidNotComplete(); }}
+      >
+        <DialogContent
+          className="bg-slate-900 border border-white/10 text-white max-w-sm"
+          data-testid="dialog-task-confirm"
+        >
+          <DialogHeader>
+            <DialogTitle className="text-white text-lg">Did you complete this task?</DialogTitle>
+            <DialogDescription className="text-white/50 text-sm">
+              Only confirm if you fully completed the offer in the new tab.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-3 mt-2">
+            <Button
+              data-testid="button-confirm-completed"
+              onClick={() => pendingConfirmTask && handleConfirm(pendingConfirmTask.id)}
+              className="bg-emerald-500 hover:bg-emerald-400 text-white rounded-xl w-full"
+            >
+              ✅ I completed this task
+            </Button>
+            <Button
+              data-testid="button-confirm-not-completed"
+              variant="outline"
+              onClick={handleDidNotComplete}
+              className="border-white/20 text-white/70 hover:text-white hover:bg-white/10 rounded-xl w-full"
+            >
+              ❌ I did not complete this task
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* ── TASK HISTORY TAB ── */}
       {tab === "history" && (

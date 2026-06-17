@@ -1,0 +1,151 @@
+Phase 1 – Task Start Flow (Revised)
+
+The Universal Platform Engine is working correctly.
+
+Do NOT modify:
+
+- Platform Import Engine
+- Firestore structure
+- Admin logic
+- Platform APIs
+- Postback system
+
+This phase ONLY redesigns the beginning of the task lifecycle.
+
+---
+
+Current Behavior
+
+Currently, when the user clicks:
+
+Complete Task
+
+The offer already opens correctly in a new browser tab while keeping the GTO page open.
+
+Keep this behavior exactly as it is.
+
+Do NOT change how the offer is opened.
+
+---
+
+Required Change
+
+Rename the button:
+
+Current:
+
+Complete Task
+
+New:
+
+Start Task
+
+The button must continue opening the offer in a new browser tab exactly as before.
+
+---
+
+After Returning to GTO
+
+After the user returns to the GTO page, display a confirmation dialog.
+
+Question:
+
+Did you complete this task?
+
+Buttons:
+
+✅ I completed this task
+
+❌ I did not complete this task
+
+---
+
+If User Clicks:
+
+❌ I did not complete this task
+
+Requirements:
+
+- Keep the task inside Available Tasks.
+- Do NOT move it to Task History.
+- Do NOT increase Pending Balance.
+- Do NOT mark it completed.
+- User must be able to press Start Task again later.
+
+The task should behave exactly as if nothing happened.
+
+---
+
+If User Closes Everything
+
+If the user:
+
+- Opens the offer,
+- Closes the offer tab,
+- Closes the browser,
+- Loses internet,
+- Or leaves without pressing either button,
+
+The system must NOT assume that the task was completed.
+
+The task must remain available until the user explicitly confirms completion.
+
+---
+
+Important
+
+Do NOT implement:
+
+- Pending Platform Verification
+- Platform approval
+- Dashboard updates
+- Balance changes
+- History changes
+
+Those will be implemented in later phases.
+
+This phase is ONLY responsible for the beginning of the task lifecycle.
+
+---
+
+Compatibility
+
+Do NOT break:
+
+- Universal Platform Engine
+- CPAGrip
+- AdGem
+- Future platforms
+- Firestore
+- Firebase Authentication
+- Existing APIs
+- Realtime listeners
+- Admin Panel
+
+---
+
+Verification
+
+Before finishing verify:
+
+✓ Button renamed from "Complete Task" to "Start Task".
+
+✓ Offer still opens in a new browser tab exactly as before.
+
+✓ GTO page remains open.
+
+✓ Confirmation dialog appears after returning.
+
+✓ Clicking "I did not complete this task" keeps the task available.
+
+✓ Task does NOT move to History.
+
+✓ Pending Balance does NOT increase.
+
+✓ User can start the same task again later.
+
+✓ Build succeeds.
+
+✓ No TypeScript errors.
+
+Do not finish until every verification item passes.
