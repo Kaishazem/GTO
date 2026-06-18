@@ -299,6 +299,20 @@ type ManualTaskCompletion = {
   submittedAt: Date;
 };
 
+type PlatformTaskCompletion = {
+  id: string;
+  taskId: string;
+  taskTitle: string;
+  userId: string;
+  userName: string;
+  userEmail: string;
+  reward: number;
+  platformName: string;
+  verifiedBy: string;
+  platformVerifiedAt: Date;
+  submittedAt: Date;
+};
+
 type ManagedPlatform = {
   id: string;
   name: string;
@@ -470,7 +484,10 @@ export default function AdminPage() {
   const [resetting, setResetting] = useState(false);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
 
-  const [taskSubTab, setTaskSubTab] = useState<"add" | "list" | "reviews" | "financial">("list");
+  const [taskSubTab, setTaskSubTab] = useState<"add" | "list" | "reviews" | "platformReviews" | "financial">("list");
+  const [platformReviews, setPlatformReviews] = useState<PlatformTaskCompletion[]>([]);
+  const [loadingPlatformReviews, setLoadingPlatformReviews] = useState(false);
+  const [reviewingPlatformCompletionId, setReviewingPlatformCompletionId] = useState<string | null>(null);
 
   // Withdrawal filter / search / bulk / modals
   const [wFilter, setWFilter] = useState<"all" | "pending" | "approved" | "rejected">("pending");
@@ -1598,6 +1615,73 @@ export default function AdminPage() {
       toast({ title: "Error", description: e instanceof Error ? e.message : "Failed", variant: "destructive" });
     } finally {
       setReviewingCompletionId(null);
+    }
+  }
+
+  async function fetchPlatformReviews() {
+    setLoadingPlatformReviews(true);
+    try {
+      const [completionsSnap, usersSnap] = await Promise.all([
+        getDocs(query(collection(db, "taskCompletions"), where("status", "==", "platform_approved"))),
+        getDocs(collection(db, "users")),
+      ]);
+      const usersById = new Map(usersSnap.docs.map((d) => [d.id, d.data() as Record<string, unknown>]));
+      const fetched: PlatformTaskCompletion[] = completionsSnap.docs.map((d) => {
+        const raw = d.data() as Record<string, unknown>;
+        const userData = usersById.get(String(raw.userId || ""));
+        return {
+          id: d.id,
+          taskId: String(raw.taskId || ""),
+          taskTitle: String(raw.taskTitle || "Untitled Task"),
+          userId: String(raw.userId || ""),
+          userName: String(raw.userName || userData?.name || "Unknown"),
+          userEmail: String(raw.userEmail || userData?.email || ""),
+          reward: Number(raw.reward || 0),
+          platformName: String(raw.taskPlatform || raw.platformName || "Unknown Platform"),
+          verifiedBy: String(raw.verifiedBy || ""),
+          platformVerifiedAt: (raw.platformVerifiedAt as Timestamp)?.toDate() || new Date(),
+          submittedAt: (raw.completedAt as Timestamp)?.toDate() || new Date(),
+        };
+      });
+      fetched.sort((a, b) => b.platformVerifiedAt.getTime() - a.platformVerifiedAt.getTime());
+      setPlatformReviews(fetched);
+    } finally {
+      setLoadingPlatformReviews(false);
+    }
+  }
+
+  async function handlePlatformReviewDecision(completionId: string, decision: "approved" | "rejected") {
+    const item = platformReviews.find((c) => c.id === completionId);
+    if (!item) {
+      toast({ title: "Error", description: "Completion not found.", variant: "destructive" });
+      return;
+    }
+    setReviewingPlatformCompletionId(completionId);
+    try {
+      const result = await settleWalletCompletion(
+        item.userId,
+        completionId,
+        item.reward,
+        decision === "approved" ? "approve" : "reject",
+        {
+          source: "manual_admin_review",
+          actorId: profile?.uid,
+          actorName: profile?.name || "admin",
+          reason: decision === "rejected" ? "Rejected during platform task review" : undefined,
+        }
+      );
+      if (!result.success) throw new Error(result.message || "Settlement failed");
+      toast({
+        title: decision === "approved" ? "✅ Approved" : "Rejected",
+        description: decision === "approved"
+          ? "Platform task approved — wallet credited."
+          : "Platform task rejected — pending reward removed.",
+      });
+      setPlatformReviews((prev) => prev.filter((c) => c.id !== completionId));
+    } catch (e) {
+      toast({ title: "Error", description: e instanceof Error ? e.message : "Failed", variant: "destructive" });
+    } finally {
+      setReviewingPlatformCompletionId(null);
     }
   }
 
@@ -2988,11 +3072,14 @@ export default function AdminPage() {
       {tab === "tasks" && (
         <div className="space-y-4">
           <div className="flex gap-2 flex-wrap">
-            {(["add", "list", "reviews", "financial"] as const).map((s) => (
-              <button key={s} onClick={() => setTaskSubTab(s)}
+            {(["add", "list", "reviews", "platformReviews", "financial"] as const).map((s) => (
+              <button key={s} onClick={() => {
+                setTaskSubTab(s);
+                if (s === "platformReviews") fetchPlatformReviews();
+              }}
                 className={cn("px-3 py-1.5 rounded-lg text-xs font-medium transition-all",
                   taskSubTab === s ? "bg-white/15 text-white" : "bg-white/5 text-white/50 hover:bg-white/10")}>
-                {s === "add" ? "Add New Task" : s === "list" ? `Task List (${tasks.length})` : s === "reviews" ? `Reviews (${manualCompletions.length})` : "Financial"}
+                {s === "add" ? "Add New Task" : s === "list" ? `Task List (${tasks.length})` : s === "reviews" ? `Manual Reviews (${manualCompletions.length})` : s === "platformReviews" ? `Platform Reviews (${platformReviews.length})` : "Financial"}
               </button>
             ))}
           </div>
@@ -3181,6 +3268,76 @@ export default function AdminPage() {
                         )}
                         variant="outline">
                         {reviewingCompletionId === c.id && c.status !== "rejected"
+                          ? <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                          : <ThumbsDown className="w-3 h-3 mr-1" />}
+                        Reject
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          )}
+
+          {taskSubTab === "platformReviews" && (
+          <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
+            <div className="flex items-center justify-between mb-4 gap-3">
+              <h2 className="font-semibold text-white flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-blue-400" />
+                Platform Task Reviews ({platformReviews.length})
+              </h2>
+              <Button size="sm" variant="outline" onClick={fetchPlatformReviews} disabled={loadingPlatformReviews}
+                className="border-white/20 text-white/60 hover:text-white h-8">
+                <RefreshCw className={cn("w-3.5 h-3.5", loadingPlatformReviews && "animate-spin")} />
+              </Button>
+            </div>
+            <p className="text-xs text-white/40 mb-4">
+              These platform tasks have been verified by the ad network and are awaiting your final approval before funds are released to users.
+            </p>
+            {loadingPlatformReviews ? (
+              <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin text-blue-400" /></div>
+            ) : platformReviews.length === 0 ? (
+              <p className="text-white/40 text-center py-8 text-sm">No platform tasks awaiting review.</p>
+            ) : (
+              <div className="space-y-3">
+                {platformReviews.map((c) => (
+                  <div key={c.id} className="bg-white/5 border border-blue-500/20 rounded-xl p-4">
+                    <div className="flex items-start justify-between gap-3 mb-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap mb-1">
+                          <span className="text-sm font-medium text-white">{c.userName}</span>
+                          <span className="text-xs text-white/40">{c.userEmail}</span>
+                          <Badge className="text-xs border bg-blue-500/20 text-blue-300 border-blue-500/30">
+                            Platform Verified
+                          </Badge>
+                        </div>
+                        <p className="text-sm text-white/80">{c.taskTitle}</p>
+                        <div className="flex items-center gap-3 mt-1 text-xs text-white/40 flex-wrap">
+                          <span className="text-white/50">Platform: <span className="text-blue-300">{c.platformName}</span></span>
+                          <span className="text-emerald-400 font-medium">Reward: {formatCurrency(c.reward)}</span>
+                          <span>Submitted: {formatDate(c.submittedAt)}</span>
+                          <span>Verified: {formatDate(c.platformVerifiedAt)}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex gap-2 pt-2 border-t border-white/5">
+                      <Button size="sm"
+                        onClick={() => handlePlatformReviewDecision(c.id, "approved")}
+                        disabled={reviewingPlatformCompletionId === c.id}
+                        className="flex-1 rounded-lg text-xs h-8 border bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border-emerald-500/30"
+                        variant="outline">
+                        {reviewingPlatformCompletionId === c.id
+                          ? <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                          : <ThumbsUp className="w-3 h-3 mr-1" />}
+                        Approve &amp; Credit
+                      </Button>
+                      <Button size="sm"
+                        onClick={() => handlePlatformReviewDecision(c.id, "rejected")}
+                        disabled={reviewingPlatformCompletionId === c.id}
+                        className="rounded-lg text-xs h-8 border bg-red-500/10 hover:bg-red-500/20 text-red-400 border-red-500/30"
+                        variant="outline">
+                        {reviewingPlatformCompletionId === c.id
                           ? <Loader2 className="w-3 h-3 mr-1 animate-spin" />
                           : <ThumbsDown className="w-3 h-3 mr-1" />}
                         Reject

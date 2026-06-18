@@ -46,7 +46,7 @@ export interface TaskCompletion {
   userId: string;
   completedAt: Date;
   reward: number;
-  status: "pending" | "approved" | "rejected";
+  status: "pending" | "platform_pending" | "platform_approved" | "approved" | "rejected";
   taskTitle?: string;
   taskDescription?: string;
   taskType?: "manual" | "platform";
@@ -211,7 +211,7 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
       completedAt: serverTimestamp(),
       reward: earned,
       adminReward,
-      status: "pending",
+      status: taskType === "platform" ? "platform_pending" : "pending",
       taskTitle: taskData.title,
       taskDescription: taskData.description || "",
       taskType,

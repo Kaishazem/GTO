@@ -208,7 +208,7 @@ export default async function handler(req, res) {
               filters: [
                 { fieldFilter: { field: { fieldPath: 'userId' }, op: 'EQUAL', value: { stringValue: userId } } },
                 { fieldFilter: { field: { fieldPath: 'taskId' }, op: 'EQUAL', value: { stringValue: taskId } } },
-                { fieldFilter: { field: { fieldPath: 'status' }, op: 'EQUAL', value: { stringValue: 'pending' } } },
+                { fieldFilter: { field: { fieldPath: 'status' }, op: 'IN', value: { arrayValue: { values: [{ stringValue: 'pending' }, { stringValue: 'platform_pending' }] } } } },
               ],
             },
           },
@@ -336,14 +336,33 @@ async function settleCompletion(
     if (!compDoc.fields) return { applied: false, message: 'Completion document not found' };
 
     const currentStatus = compDoc.fields?.status?.stringValue;
-    if (currentStatus !== 'pending') {
-      return { applied: false, message: `Completion already settled: status=${currentStatus}` };
+    if (currentStatus !== 'pending' && currentStatus !== 'platform_pending') {
+      return { applied: false, message: `Completion not in a settleable state: status=${currentStatus}` };
     }
 
     const rf = compDoc.fields?.reward;
     const settledReward = rf?.doubleValue ?? rf?.integerValue ?? reward;
 
-    // Load current user
+    const verifiedBy = `platform:${platformId}`;
+    const nowIso     = new Date().toISOString();
+
+    // ── APPROVED: move to "platform_approved" — awaiting admin review ──────────
+    // Do NOT credit balance yet. Admin must approve before funds are released.
+    if (action === 'approved') {
+      await patchDocument(fsBase, key, `taskCompletions/${completionId}`, {
+        status:              { stringValue: 'platform_approved' },
+        verifiedBy:          { stringValue: verifiedBy },
+        taskType:            { stringValue: 'platform' },
+        taskPlatform:        { stringValue: platformName },
+        platformVerifiedAt:  { stringValue: nowIso },
+        platformVerifiedBy:  { stringValue: platformId },
+        platformName:        { stringValue: platformName },
+      });
+      console.log(`[postback] ✓ Platform approved — awaiting admin review: completion=${completionId}`);
+      return { applied: true, message: 'Platform approved — awaiting admin review' };
+    }
+
+    // ── REJECTED: fully settle immediately (remove from pendingBalance) ────────
     const userRes  = await fetch(`${fsBase}/users/${userId}${key}`);
     const userDoc  = await userRes.json();
     if (!userDoc.fields) return { applied: false, message: 'User not found' };
@@ -354,40 +373,29 @@ async function settleCompletion(
     const pending = pendF?.doubleValue ?? pendF?.integerValue ?? 0;
 
     const newPending = Math.max(0, pending - settledReward);
-    const newBalance = action === 'approved' ? balance + settledReward : balance;
-
-    const verifiedBy = `platform:${platformId}`;
     const walletTxId = generateId();
-    const nowIso     = new Date().toISOString();
 
-    // Write all three documents
     const writes = await Promise.allSettled([
-      // Update taskCompletion
       patchDocument(fsBase, key, `taskCompletions/${completionId}`, {
-        status:           { stringValue: action === 'approved' ? 'approved' : 'rejected' },
-        settlementStatus: { stringValue: action },
-        settlementDecision: { stringValue: action },
-        verifiedBy:       { stringValue: action === 'approved' ? verifiedBy : null_v() },
+        status:           { stringValue: 'rejected' },
+        settlementStatus: { stringValue: 'reject' },
+        settlementDecision: { stringValue: 'reject' },
+        verifiedBy:       { nullValue: null },
         taskType:         { stringValue: 'platform' },
         taskPlatform:     { stringValue: platformName },
         settlementSource: { stringValue: 'postback' },
         settlementActorId:{ stringValue: platformId },
         settlementTxId:   { stringValue: walletTxId },
         settledAt:        { stringValue: nowIso },
-        approvedAt:       action === 'approved' ? { stringValue: nowIso } : { nullValue: null },
-        rejectedAt:       action === 'rejected' ? { stringValue: nowIso } : { nullValue: null },
-        rejectedBy:       action === 'rejected' ? { stringValue: platformName } : { nullValue: null },
-        rejectReason:     action === 'rejected' ? { stringValue: rejectReason || 'Rejected by platform' } : { nullValue: null },
+        rejectedAt:       { stringValue: nowIso },
+        rejectedBy:       { stringValue: platformName },
+        rejectReason:     { stringValue: rejectReason || 'Rejected by platform' },
       }),
-
-      // Update user balance
       patchDocument(fsBase, key, `users/${userId}`, {
-        balance:          { doubleValue: newBalance },
+        balance:          { doubleValue: balance },
         pendingBalance:   { doubleValue: newPending },
         walletUpdatedAt:  { stringValue: nowIso },
       }),
-
-      // Create wallet transaction
       patchDocument(fsBase, key, `walletTransactions/${walletTxId}`, {
         userId:          { stringValue: userId },
         completionId:    { stringValue: completionId },
@@ -395,25 +403,26 @@ async function settleCompletion(
         taskTitle:       { stringValue: compDoc.fields?.taskTitle?.stringValue || '' },
         taskType:        { stringValue: 'platform' },
         amount:          { doubleValue: settledReward },
-        status:          { stringValue: action === 'approved' ? 'approved' : 'rejected' },
-        type:            { stringValue: action === 'approved' ? 'task_settlement_approved' : 'task_settlement_rejected' },
+        status:          { stringValue: 'rejected' },
+        type:            { stringValue: 'task_settlement_rejected' },
         source:          { stringValue: 'postback' },
         actorId:         { stringValue: platformId },
         actorName:       { stringValue: platformName },
-        verifiedBy:      { stringValue: action === 'approved' ? verifiedBy : '' },
-        duplicateGuard:  { stringValue: `${completionId}:${action}` },
+        verifiedBy:      { stringValue: '' },
+        duplicateGuard:  { stringValue: `${completionId}:rejected` },
         platformId:      { stringValue: platformId },
         platformName:    { stringValue: platformName },
+        reason:          { stringValue: rejectReason || 'Rejected by platform' },
         createdAt:       { stringValue: nowIso },
       }),
     ]);
 
     const failures = writes.filter(r => r.status === 'rejected').map(r => r.reason?.message);
     if (failures.length > 0) {
-      console.warn('[postback] ⚠ Some settlement writes failed:', failures);
+      console.warn('[postback] ⚠ Some rejection writes failed:', failures);
     }
 
-    return { applied: true, message: `Settled as ${action}`, walletTxId };
+    return { applied: true, message: 'Rejected by platform', walletTxId };
   } catch (e) {
     console.error('[postback] ✖ Settlement error:', e.message);
     return { applied: false, message: `Settlement error: ${e.message}` };

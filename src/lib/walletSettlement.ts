@@ -30,7 +30,7 @@ type CompletionDoc = {
   taskTitle?: string;
   taskType?: "manual" | "platform";
   reward?: number;
-  status?: "pending" | "approved" | "rejected";
+  status?: "pending" | "platform_pending" | "platform_approved" | "approved" | "rejected";
   settlementStatus?: SettlementAction;
   settlementDecision?: SettlementAction;
 };
@@ -67,12 +67,12 @@ export async function settleTaskCompletion(
       const currentStatus = completion.status ?? "pending";
       const currentSettlement = completion.settlementStatus ?? completion.settlementDecision;
 
-      if (currentStatus !== "pending") {
+      if (currentStatus !== "pending" && currentStatus !== "platform_approved") {
         return {
           success: true,
           applied: false,
           completionId,
-          message: "Completion is not pending",
+          message: "Completion is not in a settleable state",
         } satisfies SettlementResult;
       }
 

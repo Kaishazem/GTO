@@ -37,7 +37,7 @@ export default function DashboardPage() {
   const simpleTasks = tasks.filter((t) => t.type === "simple");
   const premiumTasks = tasks.filter((t) => t.type === "premium");
   const totalCompleted = completions.length;
-  const pendingCount = completions.filter((c) => c.status === "pending").length;
+  const pendingCount = completions.filter((c) => c.status === "pending" || c.status === "platform_pending" || c.status === "platform_approved").length;
 
   const balance = profile?.balance || 0;
   const minWithdrawal = settings?.usdtMin ?? 10;

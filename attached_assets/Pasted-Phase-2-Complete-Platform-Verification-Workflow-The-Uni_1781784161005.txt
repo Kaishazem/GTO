@@ -1,0 +1,297 @@
+Phase 2 – Complete Platform Verification Workflow
+
+The Universal Platform Engine is now stable.
+
+Verified working:
+
+- Universal Platform Engine
+- CPAGrip
+- AdGem compatibility
+- Import Engine
+- Firestore
+- Realtime listeners
+- Start Task workflow
+- Confirmation dialog
+- Pending Balance
+- Admin Panel
+- Task Details dialog
+- Import only NEW tasks
+
+Do NOT redesign or rewrite any of these systems.
+
+---
+
+IMPORTANT
+
+Do NOT implement a new platform verification mechanism.
+
+Reuse the existing verification system already implemented in the project.
+
+If an existing Postback, callback, webhook, or verification flow already exists, integrate with it.
+
+Do NOT rewrite or replace it.
+
+This task is ONLY about completing the workflow AFTER platform verification.
+
+---
+
+Current Workflow
+
+Current flow:
+
+Available Task
+
+↓
+
+Start Task
+
+↓
+
+Offer opens
+
+↓
+
+User returns
+
+↓
+
+"I completed this task"
+
+↓
+
+Pending Balance
+
+This workflow is incomplete.
+
+---
+
+Required Final Workflow
+
+The workflow must become:
+
+Available Task
+
+↓
+
+Start Task
+
+↓
+
+Offer opens
+
+↓
+
+User returns
+
+↓
+
+"I completed this task"
+
+↓
+
+Pending Platform Verification
+
+↓
+
+Existing Platform Verification System
+
+(CPAGrip / AdGem / Future Platforms)
+
+↓
+
+Platform Decision
+
+---
+
+If Platform Approves
+
+Move the task to:
+
+Waiting Admin Review
+
+NOT directly to Available Balance.
+
+The platform approval only confirms the conversion.
+
+The final financial decision always belongs to the Admin.
+
+---
+
+If Platform Rejects
+
+Immediately:
+
+- Remove reward from Pending Balance.
+- Mark task as "Rejected by Platform".
+- Store platform rejection reason (if available).
+- Display the rejection reason inside the user's Task History.
+
+Rejected platform tasks do NOT require Admin Review.
+
+---
+
+Admin Review
+
+Create a NEW Admin section:
+
+Platform Task Reviews
+
+This section must be completely separate from:
+
+Manual Task Reviews
+
+Do NOT merge both systems.
+
+Manual reviews must continue working exactly as before.
+
+---
+
+Platform Task Reviews
+
+Display:
+
+- User
+- Task
+- Platform
+- Reward
+- Platform Status
+- Platform Message
+- Submission Time
+
+Buttons:
+
+Approve
+
+Reject
+
+---
+
+Admin Decision
+
+If Admin presses:
+
+Approve
+
+Then:
+
+- Move reward from Pending Balance
+  to Available Balance.
+
+- Mark task:
+
+Approved
+
+---
+
+If Admin presses:
+
+Reject
+
+Then:
+
+- Remove reward from Pending Balance.
+
+- Mark task:
+
+Rejected by Admin
+
+- Allow optional Admin Note.
+
+---
+
+User Task History
+
+Display one of these statuses clearly:
+
+- Pending Platform Verification
+- Waiting Admin Review
+- Approved
+- Rejected by Platform
+- Rejected by Admin
+
+Use clear colors/icons.
+
+Do NOT confuse Pending Balance with Available Balance.
+
+---
+
+Firestore
+
+Do NOT redesign the Firestore schema.
+
+Only add the minimum fields or collections required for this workflow.
+
+Do NOT migrate existing data unless absolutely necessary.
+
+---
+
+Compatibility
+
+Do NOT modify:
+
+- Universal Platform Engine
+- Request Builder
+- Response Parser
+- Import Engine
+- Existing platform integrations
+- Existing realtime listeners
+- Existing Admin Manual Reviews
+
+Reuse the existing verification flow.
+
+Do NOT rewrite:
+
+- CPAGrip integration
+- AdGem integration
+
+Do NOT change the existing:
+
+Import only NEW tasks
+
+behavior.
+
+Imported offers must NEVER be duplicated.
+
+---
+
+Verification
+
+Before finishing verify:
+
+✓ Existing platform verification still works.
+
+✓ Existing Start Task workflow still works.
+
+✓ Existing confirmation dialog still works.
+
+✓ Platform-approved tasks move to Waiting Admin Review.
+
+✓ Platform-rejected tasks are rejected immediately.
+
+✓ Platform Task Reviews appear in the new Admin section.
+
+✓ Admin approval moves Pending Balance → Available Balance.
+
+✓ Admin rejection removes Pending Balance.
+
+✓ Manual Task Reviews continue working.
+
+✓ Existing imported tasks continue working.
+
+✓ Import still imports ONLY new tasks.
+
+✓ No duplicate tasks are created.
+
+✓ Existing users remain unaffected.
+
+✓ Existing task history remains intact.
+
+✓ Existing pending balances remain intact.
+
+✓ Realtime updates continue working.
+
+✓ Build succeeds.
+
+✓ No TypeScript errors.
+
+Do not finish until every verification item passes.

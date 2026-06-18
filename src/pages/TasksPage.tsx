@@ -170,12 +170,13 @@ export default function TasksPage() {
                             <Badge className="bg-white/10 text-white/60 border-white/10 text-xs">{task.platform}</Badge>
                             {done && completion && (
                               <Badge className={cn("text-xs border", {
-                                "bg-amber-500/20 text-amber-300 border-amber-500/30": completion.status === "pending",
+                                "bg-amber-500/20 text-amber-300 border-amber-500/30": completion.status === "pending" || completion.status === "platform_pending",
+                                "bg-blue-500/20 text-blue-300 border-blue-500/30": completion.status === "platform_approved",
                                 "bg-emerald-500/20 text-emerald-300 border-emerald-500/30": completion.status === "approved",
                                 "bg-red-500/20 text-red-300 border-red-500/30": completion.status === "rejected",
                               })}>
-                                {completion.status === "pending" ? "⏳ Pending" : completion.status === "approved" ? "✅ Approved" : "❌ Rejected"}
-                                {completion.verifiedBy && ` • Admin`}
+                                {completion.status === "platform_pending" ? "⏳ Verifying..." : completion.status === "platform_approved" ? "🔄 Admin Review" : completion.status === "pending" ? "⏳ Pending" : completion.status === "approved" ? "✅ Approved" : "❌ Rejected"}
+                                {completion.verifiedBy && ` • Verified`}
                               </Badge>
                             )}
                           </div>
@@ -392,11 +393,12 @@ export default function TasksPage() {
                     </p>
                     <div className="flex items-center gap-2 mt-1 flex-wrap">
                       <Badge className={cn("text-xs border", {
-                        "bg-amber-500/20 text-amber-300 border-amber-500/30": c.status === "pending",
+                        "bg-amber-500/20 text-amber-300 border-amber-500/30": c.status === "pending" || c.status === "platform_pending",
+                        "bg-blue-500/20 text-blue-300 border-blue-500/30": c.status === "platform_approved",
                         "bg-emerald-500/20 text-emerald-300 border-emerald-500/30": c.status === "approved",
                         "bg-red-500/20 text-red-300 border-red-500/30": c.status === "rejected",
                       })}>
-                        {c.status === "pending" ? "🟡 Pending" : c.status === "approved" ? "🟢 Approved" : "🔴 Rejected"}
+                        {c.status === "platform_pending" ? "🟡 Verifying..." : c.status === "platform_approved" ? "🔵 Admin Review" : c.status === "pending" ? "🟡 Pending" : c.status === "approved" ? "🟢 Approved" : "🔴 Rejected"}
                       </Badge>
                       <Badge className={cn(
                         "text-xs border",
