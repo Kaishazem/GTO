@@ -35,7 +35,7 @@ import {
   ReportComparisonResult,
 } from "@/lib/reconciliation";
 
-type TabType = "withdrawals" | "tasks" | "manualReviews" | "platforms" | "import" | "postbacks" | "settings" | "analytics" | "reconciliation" | "users";
+type TabType = "withdrawals" | "tasks" | "manualReviews" | "platforms" | "import" | "postbacks" | "settings" | "analytics" | "reconciliation" | "users" | "messages";
 
 type AdminUser = {
   uid: string; email: string; name: string; role: string;
@@ -426,6 +426,11 @@ export default function AdminPage() {
   const [banEmailReason, setBanEmailReason] = useState("");
   const [banningEmail, setBanningEmail] = useState(false);
   const [loadingBannedEmails, setLoadingBannedEmails] = useState(false);
+  const [sysMessages, setSysMessages] = useState<{ id: string; title: string; message: string; createdAt: Date; active: boolean }[]>([]);
+  const [loadingSysMsg, setLoadingSysMsg] = useState(false);
+  const [newSysMsgTitle, setNewSysMsgTitle] = useState("");
+  const [newSysMsgBody, setNewSysMsgBody] = useState("");
+  const [sendingSysMsg, setSendingSysMsg] = useState(false);
 
   // Users management
   const [allUsers, setAllUsers] = useState<AdminUser[]>([]);
@@ -1006,6 +1011,55 @@ export default function AdminPage() {
     }
     await fetchBannedEmails();
     toast({ title: `✅ ${email} unbanned` });
+  }
+
+  async function fetchSysMessages() {
+    setLoadingSysMsg(true);
+    try {
+      const snap = await getDocs(query(collection(db, "systemMessages"), where("active", "==", true)));
+      const msgs = snap.docs.map((d) => ({
+        id: d.id,
+        title: d.data().title as string,
+        message: d.data().message as string,
+        createdAt: (d.data().createdAt as Timestamp)?.toDate() || new Date(),
+        active: d.data().active as boolean,
+      }));
+      msgs.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+      setSysMessages(msgs);
+    } finally {
+      setLoadingSysMsg(false);
+    }
+  }
+
+  async function sendSystemMessage() {
+    if (!newSysMsgTitle.trim() || !newSysMsgBody.trim()) {
+      toast({ title: "Missing fields", description: "Title and message are required", variant: "destructive" });
+      return;
+    }
+    setSendingSysMsg(true);
+    try {
+      await addDoc(collection(db, "systemMessages"), {
+        title: newSysMsgTitle.trim(),
+        message: newSysMsgBody.trim(),
+        active: true,
+        createdAt: serverTimestamp(),
+        sentBy: profile?.email || "admin",
+      });
+      setNewSysMsgTitle("");
+      setNewSysMsgBody("");
+      toast({ title: "📢 Message broadcast!", description: "All users will see this notification in real time." });
+      await fetchSysMessages();
+    } catch (err) {
+      toast({ title: "Error", description: "Failed to send message", variant: "destructive" });
+    } finally {
+      setSendingSysMsg(false);
+    }
+  }
+
+  async function archiveSysMessage(id: string) {
+    await updateDoc(doc(db, "systemMessages", id), { active: false });
+    await fetchSysMessages();
+    toast({ title: "Message archived" });
   }
 
   async function fetchTasks() {
@@ -2174,6 +2228,7 @@ export default function AdminPage() {
     { id: "postbacks", label: `Postbacks${conversionStats ? ` (${conversionStats.total})` : ""}` },
     { id: "analytics", label: "Analytics" },
     { id: "users", label: "Users" },
+    { id: "messages", label: "Broadcast" },
     { id: "settings", label: "Settings" },
   ];
 
@@ -4666,6 +4721,96 @@ export default function AdminPage() {
             )}
           </div>
 
+        </div>
+      )}
+
+      {/* ── System Messages / Broadcast ── */}
+      {tab === "messages" && (
+        <div className="space-y-4">
+          {/* Compose new message */}
+          <div className="bg-white/5 border border-white/10 rounded-2xl p-6">
+            <h2 className="font-semibold text-white mb-1 flex items-center gap-2">
+              📢 Broadcast System Message
+            </h2>
+            <p className="text-xs text-white/40 mb-5">
+              Broadcast a notification to all users in real time. Messages appear immediately in every user's Notification Center.
+            </p>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-medium text-white/60 block mb-1">Title</label>
+                <Input
+                  value={newSysMsgTitle}
+                  onChange={(e) => setNewSysMsgTitle(e.target.value)}
+                  placeholder="e.g. Scheduled Maintenance Tonight"
+                  className="bg-white/10 border-white/20 text-white placeholder:text-white/30"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-white/60 block mb-1">Message</label>
+                <textarea
+                  value={newSysMsgBody}
+                  onChange={(e) => setNewSysMsgBody(e.target.value)}
+                  rows={3}
+                  placeholder="Enter the message body..."
+                  className="w-full bg-white/10 border border-white/20 text-white rounded-lg px-3 py-2 text-sm placeholder:text-white/30 focus:outline-none focus:border-emerald-400 resize-none"
+                />
+              </div>
+              <Button
+                onClick={sendSystemMessage}
+                disabled={sendingSysMsg || !newSysMsgTitle.trim() || !newSysMsgBody.trim()}
+                className="bg-emerald-500 hover:bg-emerald-400 text-white rounded-xl"
+              >
+                {sendingSysMsg ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                📢 Send to All Users
+              </Button>
+            </div>
+          </div>
+
+          {/* Active system messages list */}
+          <div className="bg-white/5 border border-white/10 rounded-2xl p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-white text-sm">Active Broadcasts</h3>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={fetchSysMessages}
+                disabled={loadingSysMsg}
+                className="border-white/20 text-white/60 hover:text-white text-xs h-7"
+              >
+                {loadingSysMsg ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <RefreshCw className="w-3 h-3 mr-1" />}
+                Refresh
+              </Button>
+            </div>
+            {sysMessages.length === 0 ? (
+              <div className="text-center py-8">
+                <p className="text-white/30 text-sm">No active broadcasts</p>
+                <button
+                  onClick={fetchSysMessages}
+                  className="text-xs text-white/20 hover:text-white/40 mt-2 transition-colors"
+                >
+                  {loadingSysMsg ? "Loading..." : "Click Refresh to load"}
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {sysMessages.map((m) => (
+                  <div key={m.id} className="flex items-start justify-between gap-3 bg-white/5 border border-white/10 rounded-xl p-4">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-white">{m.title}</p>
+                      <p className="text-xs text-white/50 mt-0.5 leading-relaxed">{m.message}</p>
+                      <p className="text-xs text-white/25 mt-1.5">{formatDate(m.createdAt)}</p>
+                    </div>
+                    <button
+                      onClick={() => archiveSysMessage(m.id)}
+                      className="shrink-0 text-xs text-red-400/60 hover:text-red-400 transition-colors px-2 py-1 rounded-lg hover:bg-red-500/10"
+                    >
+                      Archive
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

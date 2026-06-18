@@ -5,6 +5,7 @@ import { TooltipProvider } from "./components/ui/tooltip";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { TaskProvider } from "@/contexts/TaskContext";
 import { WalletProvider } from "@/contexts/WalletContext";
+import { NotificationProvider } from "@/contexts/NotificationContext";
 import Layout from "@/components/Layout";
 import LoginPage from "@/pages/LoginPage";
 import RegisterPage from "@/pages/RegisterPage";
@@ -145,10 +146,12 @@ function App() {
         <AuthProvider>
           <TaskProvider>
             <WalletProvider>
-              <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-                <AppRoutes />
-              </WouterRouter>
-              <Toaster />
+              <NotificationProvider>
+                <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+                  <AppRoutes />
+                </WouterRouter>
+                <Toaster />
+              </NotificationProvider>
             </WalletProvider>
           </TaskProvider>
         </AuthProvider>

@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { LayoutDashboard, ListTodo, Wallet, LogOut, ShieldCheck, Menu, X, UserCircle, Fingerprint } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
+import NotificationCenter from "@/components/NotificationCenter";
 
 interface NavItem {
   label: string;
@@ -61,7 +62,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             </Link>
           ))}
         </div>
-        <div className="flex items-center gap-3 ml-4">
+        <div className="flex items-center gap-2 ml-4">
+          <NotificationCenter />
           <div className="hidden md:flex flex-col items-end">
             <span className="text-sm font-medium text-white">{profile?.name}</span>
             {profile && (

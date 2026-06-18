@@ -142,5 +142,24 @@ service cloud.firestore {
       allow read, update, delete: if isAdmin();
     }
 
+    // ── notifications/{notifId} ────────────────────────────────────────────
+    // Notifications are keyed by a deterministic ID (userId_dedupeKey).
+    // Users can create their own notifications and read/update (mark read/delete) them.
+    // Admins can read and manage all.
+    match /notifications/{notifId} {
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read, update: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow read, write: if isAdmin();
+    }
+
+    // ── systemMessages/{msgId} ─────────────────────────────────────────────
+    // Admin-broadcast messages that trigger notifications for all users.
+    // Authenticated users can read (to detect new messages via realtime listener).
+    // Only admins may create, update, or delete.
+    match /systemMessages/{msgId} {
+      allow read:  if isSignedIn();
+      allow write: if isAdmin();
+    }
+
   }
 }
