@@ -38,6 +38,14 @@ export interface Task {
   active: boolean;
   networkStatus: "pending" | "approved" | "rejected";
   createdAt: Date;
+  // Fields imported from ad platforms via the Universal Platform Engine
+  category?: string;
+  countries?: string[];
+  devices?: string[];
+  requirements?: string;
+  image?: string;
+  conversionType?: string;
+  externalId?: string;
 }
 
 export interface TaskCompletion {
@@ -84,6 +92,16 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
 
   function mapTask(d: QueryDocumentSnapshot<DocumentData>): Task {
     const data = d.data();
+    const toStringArray = (v: unknown): string[] | undefined => {
+      if (!v) return undefined;
+      if (Array.isArray(v)) {
+        const arr = v.map(String).filter(Boolean);
+        return arr.length > 0 ? arr : undefined;
+      }
+      const s = String(v).trim();
+      if (!s) return undefined;
+      return s.split(/[,;|]/).map((x) => x.trim()).filter(Boolean);
+    };
     return {
       id: d.id,
       title: data.title || "",
@@ -99,6 +117,13 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
       active: data.active ?? true,
       networkStatus: data.networkStatus || "pending",
       createdAt: (data.createdAt as Timestamp)?.toDate() || new Date(),
+      category: data.category ? String(data.category) : undefined,
+      countries: toStringArray(data.countries),
+      devices: toStringArray(data.devices),
+      requirements: data.requirements ? String(data.requirements) : undefined,
+      image: data.image ? String(data.image) : undefined,
+      conversionType: data.conversionType ? String(data.conversionType) : undefined,
+      externalId: data.externalId ? String(data.externalId) : undefined,
     };
   }
 

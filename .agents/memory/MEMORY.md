@@ -1,3 +1,2 @@
-- [import-platform handler auth](import-platform-auth.md) — handler must receive admin ID token to authenticate Firestore REST calls; 403 was silently treated as "not found"
-- [Vercel function count fix](vercel-modules-underscore.md) — api/modules/ renamed to api/_modules/ so Vercel excludes them from serverless function discovery; only import-platform.js uses these modules
-- [AdminPage real-time listeners](adminpage-realtime.md) — tasks, platforms, and taskCompletions all use onSnapshot in dedicated useEffects; fetchTasks/fetchManualCompletions/fetchPlatforms kept for compat but no longer called on mount
+- [Task interface platform fields](task-platform-fields.md) — Task interface has optional category/countries/devices/requirements/image/conversionType/externalId from import engine; mapTask reads them.
+- [Completion status flow](completion-status-flow.md) — 5 statuses: pending→platform_pending→platform_approved→approved/rejected; "pending" filter covers all 3 in-progress states.
