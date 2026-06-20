@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useWallet } from "@/contexts/WalletContext";
 import { useLocation } from "wouter";
@@ -493,6 +493,7 @@ export default function AdminPage() {
   const [platformReviews, setPlatformReviews] = useState<PlatformTaskCompletion[]>([]);
   const [loadingPlatformReviews, setLoadingPlatformReviews] = useState(false);
   const [reviewingPlatformCompletionId, setReviewingPlatformCompletionId] = useState<string | null>(null);
+  const platformReviewUsersCache = useRef<Map<string, Record<string, unknown>>>(new Map());
 
   // Withdrawal filter / search / bulk / modals
   const [wFilter, setWFilter] = useState<"all" | "pending" | "approved" | "rejected">("pending");
@@ -655,6 +656,51 @@ export default function AdminPage() {
       setPlatforms(fetched);
       setLoadingPlatforms(false);
     });
+    return () => unsub();
+  }, [profile?.role]);
+
+  // Real-time: platform task reviews (platform_approved → awaiting admin decision)
+  useEffect(() => {
+    if (!profile || profile.role !== "admin") return;
+    setLoadingPlatformReviews(true);
+    const cache = platformReviewUsersCache.current;
+
+    const q = query(collection(db, "taskCompletions"), where("status", "==", "platform_approved"));
+    const unsub = onSnapshot(q, async (snap) => {
+      const missingUserIds = [...new Set(snap.docs.map((d) => String(d.data().userId || "")))]
+        .filter((id) => id && !cache.has(id));
+
+      if (missingUserIds.length > 0) {
+        await Promise.all(
+          missingUserIds.map(async (id) => {
+            const ud = await getDoc(doc(db, "users", id));
+            if (ud.exists()) cache.set(id, ud.data() as Record<string, unknown>);
+          })
+        );
+      }
+
+      const fetched: PlatformTaskCompletion[] = snap.docs.map((d) => {
+        const raw = d.data() as Record<string, unknown>;
+        const userData = cache.get(String(raw.userId || "")) || {};
+        return {
+          id: d.id,
+          taskId: String(raw.taskId || ""),
+          taskTitle: String(raw.taskTitle || "Untitled Task"),
+          userId: String(raw.userId || ""),
+          userName: String(raw.userName || userData.name || "Unknown"),
+          userEmail: String(raw.userEmail || userData.email || ""),
+          reward: Number(raw.reward || 0),
+          platformName: String(raw.taskPlatform || raw.platformName || "Unknown Platform"),
+          verifiedBy: String(raw.verifiedBy || ""),
+          platformVerifiedAt: (raw.platformVerifiedAt as Timestamp)?.toDate() || new Date(),
+          submittedAt: (raw.completedAt as Timestamp)?.toDate() || new Date(),
+        };
+      });
+      fetched.sort((a, b) => b.platformVerifiedAt.getTime() - a.platformVerifiedAt.getTime());
+      setPlatformReviews(fetched);
+      setLoadingPlatformReviews(false);
+    });
+
     return () => unsub();
   }, [profile?.role]);
 
@@ -3130,7 +3176,6 @@ export default function AdminPage() {
             {(["add", "list", "reviews", "platformReviews", "financial"] as const).map((s) => (
               <button key={s} onClick={() => {
                 setTaskSubTab(s);
-                if (s === "platformReviews") fetchPlatformReviews();
               }}
                 className={cn("px-3 py-1.5 rounded-lg text-xs font-medium transition-all",
                   taskSubTab === s ? "bg-white/15 text-white" : "bg-white/5 text-white/50 hover:bg-white/10")}>

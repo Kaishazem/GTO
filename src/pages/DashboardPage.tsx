@@ -10,7 +10,7 @@ import { Link } from "wouter";
 import { useEffect, useState } from "react";
 import { getSettings, AppSettings } from "@/lib/settings";
 import {
-  collection, getDocs, query, where, Timestamp, doc, getDoc,
+  collection, getDocs, onSnapshot, query, where, Timestamp, doc, getDoc,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { cn } from "@/lib/utils";
@@ -260,6 +260,22 @@ function AdminDashboard() {
     }
 
     fetchAdminStats();
+  }, []);
+
+  // Real-time listener: keep Platform Pending / Platform Reviews counters live
+  useEffect(() => {
+    const q = query(
+      collection(db, "taskCompletions"),
+      where("status", "in", ["pending", "platform_pending", "platform_approved"])
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const data = snap.docs.map((d) => d.data());
+      const platformPending  = data.filter((c) => c.status === "platform_pending").length;
+      const platformApproved = data.filter((c) => c.status === "platform_approved").length;
+      const manualPending    = data.filter((c) => c.status === "pending").length;
+      setStats((prev) => ({ ...prev, platformPending, platformApproved, manualPending }));
+    });
+    return () => unsub();
   }, []);
 
   const totalPendingReviews = stats.platformPending + stats.platformApproved + stats.manualPending;

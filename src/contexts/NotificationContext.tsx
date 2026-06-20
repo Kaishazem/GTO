@@ -60,14 +60,14 @@ function completionStatusToNotif(
       return {
         type: "platform_pending",
         title: "Task Submitted",
-        message: `${name} has been submitted and is awaiting platform verification.`,
+        message: `${name} has been submitted and is under review.`,
         icon: "⏳",
       };
     case "platform_approved":
       return {
         type: "platform_approved",
-        title: "Platform Approved ✅",
-        message: `${name} was approved by the platform. Waiting for admin review before your reward of ${amt} is released.`,
+        title: "Task Under Review",
+        message: `${name} is being reviewed. Your reward of ${amt} will be released once approved.`,
         icon: "🔄",
       };
     case "approved":

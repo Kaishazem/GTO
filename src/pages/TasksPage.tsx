@@ -45,15 +45,15 @@ function statusBadgeProps(status: CompletionStatus): { label: string; className:
   switch (status) {
     case "platform_pending":
       return {
-        label: "Pending Platform Verification",
+        label: "Pending",
         className: "bg-amber-500/20 text-amber-300 border-amber-500/30",
         icon: <Clock className="w-3 h-3 mr-1" />,
       };
     case "platform_approved":
       return {
-        label: "Waiting Admin Review",
-        className: "bg-blue-500/20 text-blue-300 border-blue-500/30",
-        icon: <RefreshCw className="w-3 h-3 mr-1" />,
+        label: "Pending",
+        className: "bg-amber-500/20 text-amber-300 border-amber-500/30",
+        icon: <Clock className="w-3 h-3 mr-1" />,
       };
     case "pending":
       return {
