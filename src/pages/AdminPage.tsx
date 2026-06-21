@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useWallet } from "@/contexts/WalletContext";
 import { useLocation } from "wouter";
@@ -409,8 +409,8 @@ export default function AdminPage() {
   const [newPlatform, setNewPlatform] = useState(emptyPlatformForm);
 
   const [fetchingNetwork, setFetchingNetwork] = useState<string | null>(null);
-  const [importedOffers, setImportedOffers] = useState<Record<string, unknown>[]>([]);
-  const [selectedImportOffers, setSelectedImportOffers] = useState<Set<number>>(new Set());
+  const [importedOffersByPlatform, setImportedOffersByPlatform] = useState<Record<string, Record<string, unknown>[]>>({});
+  const [selectedImportOffersByPlatform, setSelectedImportOffersByPlatform] = useState<Record<string, Set<number>>>({});
   const [importingOffers, setImportingOffers] = useState(false);
 
   const [conversions, setConversions] = useState<PostbackConversion[]>([]);
@@ -493,6 +493,7 @@ export default function AdminPage() {
   const [platformReviews, setPlatformReviews] = useState<PlatformTaskCompletion[]>([]);
   const [loadingPlatformReviews, setLoadingPlatformReviews] = useState(false);
   const [reviewingPlatformCompletionId, setReviewingPlatformCompletionId] = useState<string | null>(null);
+  const platformReviewUsersCache = useRef<Map<string, Record<string, unknown>>>(new Map());
 
   // Withdrawal filter / search / bulk / modals
   const [wFilter, setWFilter] = useState<"all" | "pending" | "approved" | "rejected">("pending");
@@ -655,6 +656,51 @@ export default function AdminPage() {
       setPlatforms(fetched);
       setLoadingPlatforms(false);
     });
+    return () => unsub();
+  }, [profile?.role]);
+
+  // Real-time: platform task reviews (platform_approved → awaiting admin decision)
+  useEffect(() => {
+    if (!profile || profile.role !== "admin") return;
+    setLoadingPlatformReviews(true);
+    const cache = platformReviewUsersCache.current;
+
+    const q = query(collection(db, "taskCompletions"), where("status", "==", "platform_approved"));
+    const unsub = onSnapshot(q, async (snap) => {
+      const missingUserIds = [...new Set(snap.docs.map((d) => String(d.data().userId || "")))]
+        .filter((id) => id && !cache.has(id));
+
+      if (missingUserIds.length > 0) {
+        await Promise.all(
+          missingUserIds.map(async (id) => {
+            const ud = await getDoc(doc(db, "users", id));
+            if (ud.exists()) cache.set(id, ud.data() as Record<string, unknown>);
+          })
+        );
+      }
+
+      const fetched: PlatformTaskCompletion[] = snap.docs.map((d) => {
+        const raw = d.data() as Record<string, unknown>;
+        const userData = cache.get(String(raw.userId || "")) || {};
+        return {
+          id: d.id,
+          taskId: String(raw.taskId || ""),
+          taskTitle: String(raw.taskTitle || "Untitled Task"),
+          userId: String(raw.userId || ""),
+          userName: String(raw.userName || userData.name || "Unknown"),
+          userEmail: String(raw.userEmail || userData.email || ""),
+          reward: Number(raw.reward || 0),
+          platformName: String(raw.taskPlatform || raw.platformName || "Unknown Platform"),
+          verifiedBy: String(raw.verifiedBy || ""),
+          platformVerifiedAt: (raw.platformVerifiedAt as Timestamp)?.toDate() || new Date(),
+          submittedAt: (raw.completedAt as Timestamp)?.toDate() || new Date(),
+        };
+      });
+      fetched.sort((a, b) => b.platformVerifiedAt.getTime() - a.platformVerifiedAt.getTime());
+      setPlatformReviews(fetched);
+      setLoadingPlatformReviews(false);
+    });
+
     return () => unsub();
   }, [profile?.role]);
 
@@ -1138,8 +1184,8 @@ export default function AdminPage() {
 
   async function fetchOffersFromNetwork(platformId: string) {
     setFetchingNetwork(platformId);
-    setImportedOffers([]);
-    setSelectedImportOffers(new Set());
+    setImportedOffersByPlatform((prev) => ({ ...prev, [platformId]: [] }));
+    setSelectedImportOffersByPlatform((prev) => ({ ...prev, [platformId]: new Set() }));
     try {
       const platform = platforms.find((p) => p.id === platformId);
       if (!platform) throw new Error("Platform not found — please refresh the page.");
@@ -1155,7 +1201,7 @@ export default function AdminPage() {
       if (!d.success) throw new Error(d.error || "No offers returned");
       const offers = d.offers || [];
       if (offers.length === 0) throw new Error("No offers returned. Check platform configuration.");
-      setImportedOffers(offers);
+      setImportedOffersByPlatform((prev) => ({ ...prev, [platformId]: offers }));
       toast({ title: `✅ Found ${offers.length} offers` });
       await fetchPlatforms();
     } catch (e: unknown) {
@@ -1166,7 +1212,9 @@ export default function AdminPage() {
   }
 
   async function importSelectedOffers(platformId: string) {
-    if (selectedImportOffers.size === 0) {
+    const selected = selectedImportOffersByPlatform[platformId] ?? new Set<number>();
+    const offers   = importedOffersByPlatform[platformId] ?? [];
+    if (selected.size === 0) {
       toast({ title: "None selected", description: "Select at least one offer to import", variant: "destructive" });
       return;
     }
@@ -1175,8 +1223,8 @@ export default function AdminPage() {
     const platformName = platform?.displayName || platformId;
     try {
       let imported = 0;
-      const writes = Array.from(selectedImportOffers).map(async (idx) => {
-        const offer = importedOffers[idx];
+      const writes = Array.from(selected).map(async (idx) => {
+        const offer = offers[idx];
         if (!offer) return;
         const title = String(offer.name || offer.title || offer.offer_name || "Untitled Offer");
         const payout = parseFloat(String(offer.payout || offer.reward || offer.amount || "0.005"));
@@ -1203,8 +1251,8 @@ export default function AdminPage() {
       });
       await Promise.all(writes);
       await fetchTasks();
-      setImportedOffers([]);
-      setSelectedImportOffers(new Set());
+      setImportedOffersByPlatform((prev) => ({ ...prev, [platformId]: [] }));
+      setSelectedImportOffersByPlatform((prev) => ({ ...prev, [platformId]: new Set() }));
       toast({ title: `✅ Imported ${imported} tasks`, description: "Imported as platform tasks." });
     } finally {
       setImportingOffers(false);
@@ -3130,7 +3178,6 @@ export default function AdminPage() {
             {(["add", "list", "reviews", "platformReviews", "financial"] as const).map((s) => (
               <button key={s} onClick={() => {
                 setTaskSubTab(s);
-                if (s === "platformReviews") fetchPlatformReviews();
               }}
                 className={cn("px-3 py-1.5 rounded-lg text-xs font-medium transition-all",
                   taskSubTab === s ? "bg-white/15 text-white" : "bg-white/5 text-white/50 hover:bg-white/10")}>
@@ -3922,29 +3969,36 @@ export default function AdminPage() {
                   </Button>
                 </div>
 
-                {importedOffers.length > 0 && fetchingNetwork !== platform.id && (
+                {(importedOffersByPlatform[platform.id]?.length ?? 0) > 0 && fetchingNetwork !== platform.id && (() => {
+                  const platformOffers   = importedOffersByPlatform[platform.id] ?? [];
+                  const platformSelected = selectedImportOffersByPlatform[platform.id] ?? new Set<number>();
+                  return (
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
-                      <p className="text-sm text-white/60">{importedOffers.length} offers found — select to import</p>
+                      <p className="text-sm text-white/60">{platformOffers.length} offers found — select to import</p>
                       <div className="flex gap-2">
-                        <Button size="sm" variant="outline" onClick={() => setSelectedImportOffers(new Set(importedOffers.map((_, i) => i)))}
+                        <Button size="sm" variant="outline"
+                          onClick={() => setSelectedImportOffersByPlatform((prev) => ({ ...prev, [platform.id]: new Set(platformOffers.map((_, i) => i)) }))}
                           className="border-white/20 text-white/60 hover:text-white text-xs h-7">Select All</Button>
-                        <Button size="sm" onClick={() => importSelectedOffers(platform.id)} disabled={importingOffers || selectedImportOffers.size === 0}
+                        <Button size="sm" variant="outline"
+                          onClick={() => setSelectedImportOffersByPlatform((prev) => ({ ...prev, [platform.id]: new Set() }))}
+                          className="border-white/20 text-white/60 hover:text-white text-xs h-7">Deselect All</Button>
+                        <Button size="sm" onClick={() => importSelectedOffers(platform.id)} disabled={importingOffers || platformSelected.size === 0}
                           className="bg-emerald-500 hover:bg-emerald-400 text-white text-xs h-7 rounded-lg">
                           {importingOffers ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Download className="w-3 h-3 mr-1" />}
-                          Import ({selectedImportOffers.size})
+                          Import ({platformSelected.size})
                         </Button>
                       </div>
                     </div>
                     <div className="space-y-2 max-h-80 overflow-y-auto">
-                      {importedOffers.map((offer, idx) => (
+                      {platformOffers.map((offer, idx) => (
                         <label key={idx} className={cn("flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all",
-                          selectedImportOffers.has(idx) ? "border-emerald-500/40 bg-emerald-500/10" : "border-white/5 hover:border-white/10")}>
-                          <input type="checkbox" checked={selectedImportOffers.has(idx)}
+                          platformSelected.has(idx) ? "border-emerald-500/40 bg-emerald-500/10" : "border-white/5 hover:border-white/10")}>
+                          <input type="checkbox" checked={platformSelected.has(idx)}
                             onChange={(e) => {
-                              const s = new Set(selectedImportOffers);
+                              const s = new Set(platformSelected);
                               e.target.checked ? s.add(idx) : s.delete(idx);
-                              setSelectedImportOffers(s);
+                              setSelectedImportOffersByPlatform((prev) => ({ ...prev, [platform.id]: s }));
                             }}
                             className="w-4 h-4 accent-emerald-500" />
                           <div className="flex-1 min-w-0">
@@ -3959,7 +4013,8 @@ export default function AdminPage() {
                       ))}
                     </div>
                   </div>
-                )}
+                  );
+                })()}
               </div>
             ))
           )}

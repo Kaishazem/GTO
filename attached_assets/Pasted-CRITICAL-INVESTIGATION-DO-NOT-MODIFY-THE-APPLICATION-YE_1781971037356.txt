@@ -1,0 +1,131 @@
+CRITICAL INVESTIGATION - DO NOT MODIFY THE APPLICATION YET
+
+Before implementing any fixes, perform a complete investigation of the Platform Task workflow.
+
+DO NOT change any application logic yet.
+
+I need a detailed report about the following:
+
+1. PLATFORM POSTBACK
+
+- Verify whether the Postback endpoint is actually reachable.
+- Verify whether it is correctly configured.
+- Verify whether platform tasks can ever move from:
+  Platform Pending
+  ↓
+  Platform Reviews
+- Explain why Platform Reviews always stays at 0.
+
+2. CPA IMPORT ENGINE
+   Investigate why imported CPAGrip offers appear twice:
+
+- once under CPAGrip
+- once under AdGem
+
+Both lists reference the same tasks.
+Selecting a task in one list automatically selects it in the other.
+
+Determine:
+
+- whether this is a frontend state bug
+- backend mapping bug
+- import engine bug
+- duplicated provider registration
+- shared object reference
+
+3. OFFER DESTINATION
+   Investigate why almost every imported task eventually redirects to:
+
+cdn....
+↓
+
+togglevpn.com
+
+instead of matching the displayed instructions.
+
+Determine whether:
+
+- CPAGrip is actually providing those URLs.
+- Our importer stores the wrong destination URL.
+- Redirect tracking is replacing the original URL.
+- Metadata mapping is incorrect.
+
+4. TASK INSTRUCTIONS
+   Determine why instructions such as:
+
+"Enter your phone number"
+
+do not match the actual landing page.
+
+Explain whether the mismatch originates from:
+
+- CPAGrip
+- imported metadata
+- local parsing
+- translation layer
+
+5. BROADCAST SYSTEM
+
+Investigate:
+
+Why Broadcast messages never reach users.
+
+Verify:
+
+- Firestore writes
+- Firestore listeners
+- Notification Center subscription
+- Broadcast collection
+- User listener
+
+Also investigate Archive.
+
+Currently:
+
+Active Broadcast
+↓
+
+Archive
+
+↓
+
+No archived page exists.
+
+Determine whether Archive data is preserved or deleted.
+
+6. USER DASHBOARD COUNTERS
+
+Investigate why:
+
+Simple Tasks
+
+Premium Tasks
+
+count:
+
+Available Tasks
++
+
+Task History
+
+instead of only Available Tasks.
+
+DO NOT FIX.
+
+Only determine where the calculation happens.
+
+OUTPUT REQUIRED
+
+Provide a structured report.
+
+For every issue specify:
+
+- Root Cause
+- File(s)
+- Function(s)
+- Severity
+- Recommended Fix
+
+DO NOT modify any code yet.
+
+Only analyze.
