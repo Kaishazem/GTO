@@ -108,18 +108,32 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
 
     const response = await fetch(url.toString(), fetchOptions);
 
+    const responseText = await response.text().catch(() => "");
+
     if (!response.ok) {
-      const body = await response.text().catch(() => "");
-      console.error(`[import-platform] HTTP ${response.status}:`, body.slice(0, 300));
+      console.error(`[import-platform] HTTP ${response.status}:`, responseText.slice(0, 300));
       res.status(502).json({
         success: false,
         error: `Platform returned HTTP ${response.status}. Check your API key and endpoint configuration.`,
-        detail: body.slice(0, 300),
+        detail: responseText.slice(0, 300),
       });
       return;
     }
 
-    const data = await response.json() as unknown;
+    // Parse JSON — give a descriptive 502 instead of an unhandled 500 when the
+    // platform returns HTML (e.g. a Cloudflare error page or login redirect).
+    let data: unknown;
+    try {
+      data = JSON.parse(responseText);
+    } catch {
+      console.error("[import-platform] Non-JSON response:", responseText.slice(0, 300));
+      res.status(502).json({
+        success: false,
+        error: "Platform returned a non-JSON response. Check your API base URL and endpoint path.",
+        received: responseText.slice(0, 300),
+      });
+      return;
+    }
 
     // ── Extract offer array from response path ─────────────────────────
     const raw = responsePath ? resolvePath(data, responsePath) : data;

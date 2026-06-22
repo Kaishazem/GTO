@@ -276,10 +276,13 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     );
 
     const unsub = onSnapshot(q, (snap) => {
-      const isInitial = !systemInitRef.current;
-
+      // Process ALL "added" changes — both on initial load and when new broadcasts arrive.
+      // createNotification uses a deterministic docId (userId + dedupeKey) so it is
+      // fully idempotent: calling it twice for the same broadcast has no effect.
+      // Removing the !isInitial guard ensures users who log in AFTER a broadcast was
+      // sent still receive the notification on their first snapshot.
       for (const change of snap.docChanges()) {
-        if (change.type === "added" && !isInitial) {
+        if (change.type === "added") {
           const data = change.doc.data();
           const msgId = change.doc.id;
           const dedupeKey = `sysmsg_${msgId}`;
@@ -297,7 +300,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         }
       }
 
-      if (isInitial) systemInitRef.current = true;
+      systemInitRef.current = true;
     });
 
     return () => {

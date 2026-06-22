@@ -427,7 +427,10 @@ export default function AdminPage() {
   const [banningEmail, setBanningEmail] = useState(false);
   const [loadingBannedEmails, setLoadingBannedEmails] = useState(false);
   const [sysMessages, setSysMessages] = useState<{ id: string; title: string; message: string; createdAt: Date; active: boolean }[]>([]);
+  const [archivedMessages, setArchivedMessages] = useState<{ id: string; title: string; message: string; createdAt: Date; active: boolean }[]>([]);
   const [loadingSysMsg, setLoadingSysMsg] = useState(false);
+  const [loadingArchivedMsg, setLoadingArchivedMsg] = useState(false);
+  const [showArchivedMsg, setShowArchivedMsg] = useState(false);
   const [newSysMsgTitle, setNewSysMsgTitle] = useState("");
   const [newSysMsgBody, setNewSysMsgBody] = useState("");
   const [sendingSysMsg, setSendingSysMsg] = useState(false);
@@ -1105,7 +1108,33 @@ export default function AdminPage() {
   async function archiveSysMessage(id: string) {
     await updateDoc(doc(db, "systemMessages", id), { active: false });
     await fetchSysMessages();
+    // Refresh archive list if currently visible
+    if (showArchivedMsg) await fetchArchivedMessages();
     toast({ title: "Message archived" });
+  }
+
+  async function fetchArchivedMessages() {
+    setLoadingArchivedMsg(true);
+    try {
+      const snap = await getDocs(query(collection(db, "systemMessages"), where("active", "==", false)));
+      const msgs = snap.docs.map((d) => ({
+        id: d.id,
+        title: d.data().title as string,
+        message: d.data().message as string,
+        createdAt: (d.data().createdAt as Timestamp)?.toDate() || new Date(),
+        active: false,
+      }));
+      msgs.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+      setArchivedMessages(msgs);
+    } finally {
+      setLoadingArchivedMsg(false);
+    }
+  }
+
+  async function reactivateSysMessage(id: string) {
+    await updateDoc(doc(db, "systemMessages", id), { active: true });
+    await Promise.all([fetchSysMessages(), fetchArchivedMessages()]);
+    toast({ title: "Message reactivated", description: "Message is now live again." });
   }
 
   async function fetchTasks() {
@@ -4864,6 +4893,51 @@ export default function AdminPage() {
                   </div>
                 ))}
               </div>
+            )}
+          </div>
+
+          {/* Archived broadcasts */}
+          <div className="bg-white/5 border border-white/10 rounded-2xl p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-white text-sm">Archived Broadcasts</h3>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={async () => {
+                  if (!showArchivedMsg) await fetchArchivedMessages();
+                  setShowArchivedMsg((v) => !v);
+                }}
+                disabled={loadingArchivedMsg}
+                className="border-white/20 text-white/60 hover:text-white text-xs h-7"
+              >
+                {loadingArchivedMsg ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : null}
+                {showArchivedMsg ? "Hide" : "Show Archive"}
+              </Button>
+            </div>
+            {showArchivedMsg && (
+              archivedMessages.length === 0 ? (
+                <div className="text-center py-6">
+                  <p className="text-white/30 text-sm">No archived broadcasts</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {archivedMessages.map((m) => (
+                    <div key={m.id} className="flex items-start justify-between gap-3 bg-white/3 border border-white/5 rounded-xl p-4 opacity-70">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold text-white/70">{m.title}</p>
+                        <p className="text-xs text-white/40 mt-0.5 leading-relaxed">{m.message}</p>
+                        <p className="text-xs text-white/20 mt-1.5">{formatDate(m.createdAt)} · archived</p>
+                      </div>
+                      <button
+                        onClick={() => reactivateSysMessage(m.id)}
+                        className="shrink-0 text-xs text-emerald-400/60 hover:text-emerald-400 transition-colors px-2 py-1 rounded-lg hover:bg-emerald-500/10 whitespace-nowrap"
+                      >
+                        Reactivate
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )
             )}
           </div>
         </div>

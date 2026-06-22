@@ -493,8 +493,12 @@ function UserDashboard() {
     value: completions.filter((c) => c.completedAt.toDateString() === day.toDateString()).length,
   }));
 
-  const simpleTasks  = tasks.filter((t) => t.type === "simple");
-  const premiumTasks = tasks.filter((t) => t.type === "premium");
+  // Exclude tasks the user has already attempted (any status) so "Available Tasks"
+  // only shows tasks the user can still complete.
+  const attemptedTaskIds = new Set(completions.map((c) => c.taskId));
+  const availableTasks = tasks.filter((t) => !attemptedTaskIds.has(t.id));
+  const simpleTasks  = availableTasks.filter((t) => t.type === "simple");
+  const premiumTasks = availableTasks.filter((t) => t.type === "premium");
 
   return (
     <div className="space-y-6">
@@ -541,7 +545,7 @@ function UserDashboard() {
         <MetricCard
           icon={<ListTodo className="w-4 h-4 text-blue-400" />}
           label="Available Tasks"
-          value={String(tasks.length)}
+          value={String(availableTasks.length)}
           sub={`${simpleTasks.length} simple · ${premiumTasks.length} premium`}
           accent="blue"
           testId="stat-available-tasks"
@@ -707,6 +711,7 @@ function UserDashboard() {
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-sm text-blue-400 font-medium">{simpleTasks.length} available</span>
+
                 <span className="text-xs text-white/20">tap to view →</span>
               </div>
             </div>
