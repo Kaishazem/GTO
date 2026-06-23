@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
 import { db } from "../firebase-admin";
-import * as admin from "firebase-admin";
+import { FieldValue } from "firebase-admin/firestore";
 
 const router = Router();
 
@@ -26,7 +26,7 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
       title: title.trim(),
       message: message.trim(),
       active: true,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
       sentBy: sentBy || "admin",
     });
 
@@ -60,7 +60,7 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
             dedupeKey,
             read: false,
             deletedForUser: false,
-            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            createdAt: FieldValue.serverTimestamp(),
           },
           { merge: false }
         );
