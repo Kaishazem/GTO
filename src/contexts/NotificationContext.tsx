@@ -105,28 +105,30 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       setNotifications([]);
       return;
     }
+    // Single-field index only (no composite index needed) — filter + sort client-side
     const q = query(
       collection(db, "notifications"),
       where("userId", "==", user.uid),
-      where("deletedForUser", "==", false),
-      orderBy("createdAt", "desc"),
-      limit(100)
+      limit(200)
     );
     const unsub = onSnapshot(q, (snap) => {
+      const mapped = snap.docs.map((d) => ({
+        id: d.id,
+        userId: d.data().userId as string,
+        type: d.data().type as string,
+        title: d.data().title as string,
+        message: d.data().message as string,
+        icon: d.data().icon as string,
+        taskId: d.data().taskId || undefined,
+        completionId: d.data().completionId || undefined,
+        read: (d.data().read as boolean) ?? false,
+        deletedForUser: (d.data().deletedForUser as boolean) ?? false,
+        createdAt: (d.data().createdAt as Timestamp)?.toDate() || new Date(),
+      }));
       setNotifications(
-        snap.docs.map((d) => ({
-          id: d.id,
-          userId: d.data().userId as string,
-          type: d.data().type as string,
-          title: d.data().title as string,
-          message: d.data().message as string,
-          icon: d.data().icon as string,
-          taskId: d.data().taskId || undefined,
-          completionId: d.data().completionId || undefined,
-          read: (d.data().read as boolean) ?? false,
-          deletedForUser: (d.data().deletedForUser as boolean) ?? false,
-          createdAt: (d.data().createdAt as Timestamp)?.toDate() || new Date(),
-        }))
+        mapped
+          .filter((n) => !n.deletedForUser)
+          .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       );
     });
     return () => unsub();
@@ -219,11 +221,11 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     }
     taskInitRef.current = false;
 
+    // orderBy alone uses auto-created single-field index — no composite needed
     const q = query(
       collection(db, "tasks"),
-      where("active", "==", true),
       orderBy("createdAt", "desc"),
-      limit(20)
+      limit(50)
     );
 
     const unsub = onSnapshot(q, (snap) => {
@@ -233,6 +235,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         for (const change of snap.docChanges()) {
           if (change.type !== "added") continue;
           const data = change.doc.data();
+          if (!data.active) continue;
           if (data.networkStatus !== "approved") continue;
           const taskId = change.doc.id;
           const dedupeKey = `newtask_${taskId}`;
@@ -268,11 +271,12 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     }
     systemInitRef.current = false;
 
+    // orderBy alone uses auto-created single-field index — no composite needed
+    // filter active:true client-side
     const q = query(
       collection(db, "systemMessages"),
-      where("active", "==", true),
       orderBy("createdAt", "desc"),
-      limit(10)
+      limit(20)
     );
 
     const unsub = onSnapshot(q, (snap) => {
@@ -284,6 +288,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       for (const change of snap.docChanges()) {
         if (change.type === "added") {
           const data = change.doc.data();
+          if (!data.active) continue; // skip archived broadcasts
           const msgId = change.doc.id;
           const dedupeKey = `sysmsg_${msgId}`;
           if (processedRef.current.has(dedupeKey)) continue;
