@@ -28,6 +28,14 @@ export interface NotifPayload {
 /**
  * Create a notification document only if one with this dedupeKey doesn't already exist.
  * Uses a deterministic document ID for idempotency — safe to call multiple times.
+ *
+ * WHY the two-step approach:
+ * Firestore security rule: `allow read: if resource.data.userId == request.auth.uid`
+ * When the document does NOT exist, `resource` is null → `resource.data` throws in the
+ * rule evaluator → permission-denied is returned to the client.
+ * So getDoc() throws for regular users on non-existent docs. We catch that and attempt
+ * the write directly. The CREATE rule uses `request.resource.data` (the incoming data),
+ * which is always defined, so it evaluates correctly.
  */
 export async function createNotification(payload: NotifPayload): Promise<void> {
   const safeKey = payload.dedupeKey.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 80);
@@ -35,24 +43,39 @@ export async function createNotification(payload: NotifPayload): Promise<void> {
   const docId = `${uidPrefix}_${safeKey}`;
   const ref = doc(db, "notifications", docId);
 
+  const data = {
+    userId: payload.userId,
+    type: payload.type,
+    title: payload.title,
+    message: payload.message,
+    icon: payload.icon,
+    taskId: payload.taskId ?? null,
+    completionId: payload.completionId ?? null,
+    dedupeKey: payload.dedupeKey,
+    read: false,
+    deletedForUser: false,
+    createdAt: serverTimestamp(),
+  };
+
   try {
+    // Step 1: Try to read the document to check if it already exists.
+    // If it exists, return early to preserve the user's read/deleted state.
+    // NOTE: this getDoc will throw "permission-denied" for regular users when
+    // the document does NOT exist (Firestore rule evaluates resource.data on null).
     const existing = await getDoc(ref);
     if (existing.exists()) return;
-
-    await setDoc(ref, {
-      userId: payload.userId,
-      type: payload.type,
-      title: payload.title,
-      message: payload.message,
-      icon: payload.icon,
-      taskId: payload.taskId ?? null,
-      completionId: payload.completionId ?? null,
-      dedupeKey: payload.dedupeKey,
-      read: false,
-      deletedForUser: false,
-      createdAt: serverTimestamp(),
-    });
+    // Doc confirmed not to exist — create it.
+    await setDoc(ref, data);
   } catch {
-    // Non-critical — silently ignore (e.g. offline, permission denied)
+    // getDoc threw — most likely because the doc doesn't exist and the Firestore
+    // read rule evaluated resource.data on a null resource (permission-denied).
+    // Fall through to a direct setDoc: the CREATE rule checks request.resource.data
+    // (the incoming payload) which is always defined and matches the user's uid.
+    try {
+      await setDoc(ref, data);
+    } catch {
+      // Truly non-critical — offline, or the doc already exists and the update
+      // rule denied the overwrite (another user's doc). Either way, safe to ignore.
+    }
   }
 }

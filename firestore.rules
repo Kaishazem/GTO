@@ -148,7 +148,11 @@ service cloud.firestore {
     // Admins can read and manage all.
     match /notifications/{notifId} {
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow read, update: if isSignedIn() && resource.data.userId == request.auth.uid;
+      // resource == null handles getDoc on non-existent docs: Firestore evaluates
+      // resource.data on null which throws in the rule engine → permission-denied.
+      // The null guard lets the existence check succeed and return {exists:false}.
+      allow read: if isSignedIn() && (resource == null || resource.data.userId == request.auth.uid);
+      allow update: if isSignedIn() && resource.data.userId == request.auth.uid;
       allow read, write: if isAdmin();
     }
 
