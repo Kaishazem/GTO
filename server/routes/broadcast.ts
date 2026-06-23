@@ -22,6 +22,11 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
   }
 
   try {
+    // Write ONE systemMessages document. Every logged-in user's NotificationContext
+    // subscribes to this collection via onSnapshot and calls createNotification()
+    // for themselves — creating a personalised notification in their own local cache
+    // and in the notifications collection. This avoids any Admin-SDK vs client-SDK
+    // race condition and works for users who log in after the broadcast was sent.
     const msgRef = await db.collection("systemMessages").add({
       title: title.trim(),
       message: message.trim(),
@@ -30,48 +35,8 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
       sentBy: sentBy || "admin",
     });
 
-    const usersSnap = await db.collection("users").select("uid").get();
-    const userIds = usersSnap.docs.map((d) => d.id);
-
-    const BATCH_SIZE = 500;
-    let delivered = 0;
-
-    for (let i = 0; i < userIds.length; i += BATCH_SIZE) {
-      const batch = db.batch();
-      const chunk = userIds.slice(i, i + BATCH_SIZE);
-
-      for (const uid of chunk) {
-        const dedupeKey = `sysmsg_${msgRef.id}`;
-        const safeKey = dedupeKey.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 80);
-        const uidPrefix = uid.slice(0, 12);
-        const docId = `${uidPrefix}_${safeKey}`;
-        const notifRef = db.collection("notifications").doc(docId);
-
-        batch.set(
-          notifRef,
-          {
-            userId: uid,
-            type: "system_message",
-            title: title.trim(),
-            message: message.trim(),
-            icon: "📢",
-            taskId: null,
-            completionId: null,
-            dedupeKey,
-            read: false,
-            deletedForUser: false,
-            createdAt: FieldValue.serverTimestamp(),
-          },
-          { merge: false }
-        );
-        delivered++;
-      }
-
-      await batch.commit();
-    }
-
-    console.log(`[broadcast] ✅ Message sent to ${delivered} users — msgId=${msgRef.id}`);
-    res.json({ ok: true, msgId: msgRef.id, delivered });
+    console.log(`[broadcast] ✅ systemMessages doc created — msgId=${msgRef.id}`);
+    res.json({ ok: true, msgId: msgRef.id });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[broadcast] Error:", message);
