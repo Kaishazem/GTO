@@ -3,6 +3,7 @@ import path from "path";
 import postbackRouter from "./routes/postback";
 import postbacksAdminRouter from "./routes/postbacks-admin";
 import importPlatformRouter from "./routes/import-platform";
+import broadcastRouter from "./routes/broadcast";
 
 const app = express();
 const IS_PROD = process.env.NODE_ENV === "production";
@@ -21,6 +22,7 @@ app.get("/api/health", (_req, res) => {
 app.use("/api/postback", postbackRouter);
 app.use("/api/postbacks-admin", postbacksAdminRouter);
 app.use("/api/import-platform", importPlatformRouter);
+app.use("/api/broadcast", broadcastRouter);
 
 // ── Production: serve Vite-built frontend ─────────────────────────────────────
 if (IS_PROD) {

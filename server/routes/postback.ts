@@ -34,8 +34,8 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
   const params = { ...req.query, ...req.body } as Record<string, string>;
 
   const platformId = params.platform || params.network || "";
-  const userId = params.user_id || params.userId || "";
-  const taskId = params.task_id || params.taskId || "";
+  const userId = params.user_id || params.userId || params.s1 || "";
+  const taskId = params.task_id || params.taskId || params.s2 || "";
   const convId = params.conv_id || params.convId || params.transaction_id || params.tid || "";
   const status = (params.status || "approved").toLowerCase();
   const amountStr = params.amount || params.payout || "0";

@@ -111,7 +111,18 @@ export default function TasksPage() {
     .sort((a, b) => b.completedAt.getTime() - a.completedAt.getTime());
 
   function handleStart(taskId: string, url: string) {
-    window.open(url, "_blank");
+    let finalUrl = url;
+    if (url && profile?.uid) {
+      try {
+        const u = new URL(url);
+        u.searchParams.set("s1", profile.uid);
+        u.searchParams.set("s2", taskId);
+        finalUrl = u.toString();
+      } catch {
+        // invalid URL — open as-is
+      }
+    }
+    window.open(finalUrl, "_blank");
     setPendingConfirmTask({ id: taskId });
   }
 

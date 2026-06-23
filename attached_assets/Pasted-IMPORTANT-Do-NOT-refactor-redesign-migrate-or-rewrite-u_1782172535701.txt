@@ -1,0 +1,180 @@
+IMPORTANT:
+
+Do NOT refactor, redesign, migrate, or rewrite unrelated code.
+
+Do NOT modify package.json, build configuration, Vercel configuration, Firebase configuration, authentication, import system, or any functionality that is currently working.
+
+Current working features that must remain untouched:
+
+- Backend server
+- Firebase Admin initialization
+- Test Connection
+- Import Offers
+- Fetch Offers
+- Duplicate offer fix
+- Broadcast archive
+- Platform import functionality
+
+First perform a code audit and identify root causes.
+Then fix ONLY the 4 issues listed below.
+After each fix, test it and provide evidence/logs.
+Create commits separately for each issue.
+
+---
+
+CRITICAL FIXES REQUIRED - GREEN TASK ORBIT
+
+Current Status:
+- Backend is running (server on port 5001)
+- Frontend is running (vite on port 5002)
+- Firebase Admin is initialized
+- Import/Test/Fetch Offers are working
+- No duplicate offers anymore
+- Broadcast archive exists and works
+
+CRITICAL ISSUES TO FIX:
+
+1. DASHBOARD COUNTERS (User Dashboard)
+Current Problem:
+- Dashboard shows incorrect task counts
+- Available tasks count includes completed tasks
+- Completed tasks are not excluded from counts
+- Counters do not update in real-time
+
+Required Fix:
+- Recalculate counters based on actual task status
+- Exclude tasks with status: "completed", "platform_approved", "platform_rejected", "rejected"
+- Only count tasks with status: "available", "pending", "platform_pending"
+- Ensure real-time updates when task status changes
+- Verify counters update immediately after task completion
+
+Files to check:
+- src/pages/DashboardPage.tsx
+- Task counting logic using Firestore queries
+
+2. BROADCAST MESSAGE DELIVERY
+Current Problem:
+- Broadcast messages sent from Admin do not reach users
+- Messages are saved to archive (archive works correctly)
+- But users do not receive notifications or see the messages
+- Archive view exists and displays correctly
+
+Required Fix:
+- Fix broadcast delivery mechanism to actual users
+- Ensure messages are delivered to all active users in real-time
+- Add real-time notification when broadcast is sent
+- Verify users see broadcast messages in their notification panel
+- Add delivery confirmation showing which users received it
+- Check if issue is with notification fan-out or user subscription
+
+Files to check:
+- server/routes/broadcast.ts (if exists)
+- src/contexts/NotificationContext.tsx
+- src/pages/AdminPage.tsx (broadcast tab)
+- Notification delivery logic
+
+3. PLATFORM REVIEWS / POSTBACKS - STATUS HANDLING
+Current Problem:
+- Postbacks section is completely empty
+- No conversions are being received
+- Platform tasks are not updating status based on platform response
+- When platform sends postback, task should update to:
+  * "platform_approved" if platform approves
+  * "platform_rejected" if platform rejects
+- Currently, no status updates are happening
+
+Required Fix:
+- Verify /api/postback endpoint is working and receiving data
+- Check Firebase Admin credentials are correct
+- Ensure postback URL is correctly configured in each platform
+- Add logging to see incoming postbacks and their parameters
+- Parse postback data to determine if approved or rejected
+- Update task status accordingly:
+  * If status=approved → set task to "platform_approved"
+  * If status=rejected → set task to "platform_rejected"
+- Show all conversions in Postbacks admin page with their status
+- Handle different platform postback formats (CPAGrip only - NO AdGem)
+
+Example Flow:
+User completes task
+↓
+Platform (CPAGrip) reviews the completion
+↓
+Platform sends postback to /api/postback with status (approved/rejected)
+↓
+Backend receives postback
+↓
+Updates task status in Firestore based on platform decision
+↓
+Shows in Postbacks section with approval/rejection status
+
+Files to check:
+- server/routes/postback.ts
+- server/routes/postbacks-admin.ts
+- src/pages/AdminPage.tsx (postbacks section)
+- Postback parsing and status update logic
+
+4. TASK DETAILS / OFFER URL - INCORRECT INFORMATION
+Current Problem:
+- When importing tasks from platforms (CPAGrip only)
+- Task details show incorrect or unclear information
+- Some tasks show phone number field (not all tasks)
+- Some tasks show other incorrect fields
+- Clicking offer link redirects to WRONG URL/destination
+- Offer information is not clear or accurate
+- Unclear if this is platform API issue or website parsing issue
+
+Required Fix:
+- Debug offer import process to see what data is received from platform
+- Verify offer URL is stored correctly in Firestore during import
+- Check offer feed parsing logic - ensure correct fields are mapped
+- Ensure offer URL includes all required parameters and is valid
+- Fix task details display to show accurate information:
+  * Correct offer title
+  * Correct offer description
+  * Correct payout amount
+  * Correct offer URL
+- Test clicking offer link redirects to correct offer landing page
+- Verify offer tracking parameters (click ID, user ID, etc.) are preserved
+- Add validation to ensure imported offers have valid URLs
+- Log what data is received vs what is displayed to identify mismatch
+
+Files to check:
+- server/routes/import-platform.ts
+- src/pages/TasksPage.tsx
+- Offer import/parse logic
+- Task details component
+
+IMPLEMENTATION REQUIREMENTS:
+
+1. Do not break existing functionality (Test/Import/Fetch work correctly)
+2. Test each fix before marking as complete
+3. Add proper error handling and logging
+4. Use Firestore for all data operations
+5. Ensure real-time updates work correctly
+6. Provide detailed implementation report showing:
+   - What was fixed
+   - What files were changed
+   - How to test each fix
+7. DO NOT mention AdGem - it was rejected and should not be referenced
+
+TESTING CHECKLIST:
+
+After fixes, verify:
+□ Dashboard counters show correct counts (only available tasks)
+□ Completed tasks excluded from available count
+□ Broadcast messages reach users in real-time
+□ Users see broadcast notifications
+□ Postbacks section shows conversions with approved/rejected status
+□ Task status updates based on platform response (approve/reject)
+□ Offer links redirect to correct offer pages
+□ Task details show accurate information (title, description, payout)
+□ No incorrect fields displayed (like phone numbers)
+
+PRIORITY ORDER:
+1. Task Details/Offer URL (Critical - users going to wrong pages)
+2. Platform Reviews/Postbacks (Critical - revenue tracking broken)
+3. Dashboard Counters (High - user experience issue)
+4. Broadcast Delivery (Medium - messages not reaching users)
+
+Please start by analyzing the current codebase and providing a detailed plan for each fix.

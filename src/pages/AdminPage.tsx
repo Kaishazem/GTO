@@ -1087,19 +1087,26 @@ export default function AdminPage() {
     }
     setSendingSysMsg(true);
     try {
-      await addDoc(collection(db, "systemMessages"), {
-        title: newSysMsgTitle.trim(),
-        message: newSysMsgBody.trim(),
-        active: true,
-        createdAt: serverTimestamp(),
-        sentBy: profile?.email || "admin",
+      const res = await fetch("/api/broadcast", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: newSysMsgTitle.trim(),
+          message: newSysMsgBody.trim(),
+          sentBy: profile?.email || "admin",
+        }),
       });
+      const data = await res.json() as { ok?: boolean; delivered?: number; error?: string };
+      if (!res.ok || !data.ok) throw new Error(data.error || "Failed to send broadcast");
       setNewSysMsgTitle("");
       setNewSysMsgBody("");
-      toast({ title: "📢 Message broadcast!", description: "All users will see this notification in real time." });
+      toast({
+        title: "📢 Message broadcast!",
+        description: `Delivered to ${data.delivered ?? 0} user${data.delivered !== 1 ? "s" : ""}.`,
+      });
       await fetchSysMessages();
     } catch (err) {
-      toast({ title: "Error", description: "Failed to send message", variant: "destructive" });
+      toast({ title: "Error", description: err instanceof Error ? err.message : "Failed to send message", variant: "destructive" });
     } finally {
       setSendingSysMsg(false);
     }
@@ -3952,9 +3959,11 @@ export default function AdminPage() {
 
           <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
             <h2 className="font-semibold text-white mb-2 flex items-center gap-2"><Link2 className="w-4 h-4 text-emerald-400" />Your Postback URL</h2>
-            <p className="text-xs text-white/40 mb-3">Use this URL in each ad network's postback settings. Replace macros with the network's variable syntax.</p>
+            <p className="text-xs text-white/40 mb-3">
+              Use this URL in CPAGrip's postback settings. CPAGrip macros: <code className="text-emerald-400">{"{{S1}}"}</code> = user ID, <code className="text-emerald-400">{"{{S2}}"}</code> = task ID, <code className="text-emerald-400">{"{{TRANSACTION_ID}}"}</code> = conversion ID, <code className="text-emerald-400">{"{{PAYOUT}}"}</code> = amount.
+            </p>
             <div className="bg-slate-900 border border-white/10 rounded-xl p-3 font-mono text-xs text-emerald-300 break-all">
-              {postbackBaseUrl}?platform=PLATFORM_ID&user_id=USER_ID&task_id=TASK_ID&conv_id=CONV_ID&status=approved&amount=PAYOUT&secret={postbackSecret || "YOUR_SECRET"}
+              {postbackBaseUrl}?platform=cpagrip&user_id={"{{S1}}"}&task_id={"{{S2}}"}&conv_id={"{{TRANSACTION_ID}}"}&status=approved&amount={"{{PAYOUT}}"}&secret={postbackSecret || "YOUR_SECRET"}
             </div>
             {platforms.length > 0 && (
               <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-3">
