@@ -1,0 +1,129 @@
+CRITICAL FIXES REQUIRED - APPLY FIXES, DO NOT ONLY ANALYZE
+
+Current Priority Issues:
+
+========================================
+ISSUE #1 - VERCEL DEPLOYMENT FAILURE
+
+Current Error:
+
+Installing dependencies...
+npm error Exit handler never called!
+Error: Command "npm install" exited with 1
+
+Required Actions:
+
+1. Investigate package.json and package-lock.json.
+2. Identify the exact dependency or lockfile problem.
+3. Regenerate package-lock.json if corrupted.
+4. Remove and recreate lockfile if necessary.
+5. Verify dependency compatibility.
+6. Fix any npm install issues.
+7. Fix any build issues.
+
+MANDATORY TESTS:
+
+Run and verify:
+
+npm install
+npm run build
+
+Both commands MUST complete successfully.
+
+If build fails:
+
+- Fix all errors.
+- Continue until build succeeds.
+
+After fixing:
+
+- Commit changes.
+- Push changes.
+
+========================================
+ISSUE #2 - BROADCAST DELIVERY
+
+Current Status:
+
+- Admin can send broadcasts.
+- Broadcast archive works.
+- Broadcast appears for Admin.
+- Regular users DO NOT receive broadcasts.
+- Users see nothing.
+
+Required Actions:
+
+1. Find the exact root cause.
+
+2. Check:
+   
+   - Firestore collection used by broadcasts.
+   - Firestore collection listened to by users.
+   - NotificationContext.
+   - Admin broadcast route.
+   - userId mapping.
+   - realtime listeners.
+
+3. Verify whether:
+   
+   - Broadcast creates only one document.
+   - Broadcast creates per-user notifications.
+   - Notifications are saved to the wrong collection.
+   - User listeners query a different collection.
+
+4. Fix delivery.
+
+Required Result:
+
+When Admin sends a broadcast:
+
+- Every user receives a notification.
+- Notification appears immediately.
+- Notification survives refresh.
+- Notification is stored correctly in Firestore.
+
+========================================
+MANDATORY TESTING
+
+Broadcast Test:
+
+1. Send a broadcast from Admin.
+2. Open a regular user account.
+3. Verify notification appears.
+4. Verify realtime delivery works.
+5. Verify Firestore documents exist.
+
+Vercel Test:
+
+1. npm install passes.
+2. npm run build passes.
+3. Project is ready for deployment.
+
+========================================
+VERY IMPORTANT
+
+DO NOT STOP AT ANALYSIS.
+
+You must:
+
+1. Identify the exact root cause.
+2. Implement the fix.
+3. Test the fix.
+4. Commit the changes.
+5. Push the changes.
+
+Final report MUST contain:
+
+- Exact root cause.
+- Files modified.
+- Test results.
+- Commit hash.
+- Confirmation that fixes were applied.
+
+DO NOT return:
+
+- Possible causes.
+- Assumptions.
+- Investigation-only reports.
+
+Only finish after actual fixes are implemented and tested.
