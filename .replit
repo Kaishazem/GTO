@@ -1,7 +1,7 @@
 language = "nodejs"
 
 run = "npm run dev"
-modules = ["nodejs-20"]
+modules = ["nodejs-20", "python-3.11"]
 
 [nix]
 channel = "stable-23_11"

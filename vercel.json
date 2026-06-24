@@ -1,5 +1,6 @@
 {
-  "installCommand": "npm ci",
+  "installCommand": "npm install --ignore-scripts",
+  "buildCommand": "vite build",
   "rewrites": [{ "source": "/(.*)", "destination": "/" }],
   "headers": [
     {
