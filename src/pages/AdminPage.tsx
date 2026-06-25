@@ -1086,25 +1086,36 @@ export default function AdminPage() {
       return;
     }
     setSendingSysMsg(true);
+    const sentTitle = newSysMsgTitle.trim();
+    const sentBody = newSysMsgBody.trim();
     try {
       const res = await fetch("/api/broadcast", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          title: newSysMsgTitle.trim(),
-          message: newSysMsgBody.trim(),
+          title: sentTitle,
+          message: sentBody,
           sentBy: profile?.email || "admin",
         }),
       });
-      const data = await res.json() as { ok?: boolean; delivered?: number; error?: string };
+      const data = await res.json() as { ok?: boolean; msgId?: string; error?: string };
       if (!res.ok || !data.ok) throw new Error(data.error || "Failed to send broadcast");
       setNewSysMsgTitle("");
       setNewSysMsgBody("");
       toast({
         title: "📢 Message broadcast!",
-        description: `Delivered to ${data.delivered ?? 0} user${data.delivered !== 1 ? "s" : ""}.`,
+        description: "Broadcast sent successfully.",
       });
-      await fetchSysMessages();
+      // Optimistically prepend the new message to the local list — avoids
+      // calling fetchSysMessages() which triggers setLoadingSysMsg(true/false)
+      // and causes a visible loading flash on the admin page.
+      setSysMessages(prev => [{
+        id: data.msgId ?? Date.now().toString(),
+        title: sentTitle,
+        message: sentBody,
+        createdAt: new Date(),
+        active: true,
+      }, ...prev]);
     } catch (err) {
       toast({ title: "Error", description: err instanceof Error ? err.message : "Failed to send message", variant: "destructive" });
     } finally {
