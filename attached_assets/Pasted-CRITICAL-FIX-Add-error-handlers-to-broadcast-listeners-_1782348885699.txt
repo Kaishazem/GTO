@@ -1,0 +1,92 @@
+CRITICAL FIX: Add error handlers to broadcast listeners and diagnose the exact failure
+
+Based on the investigation report, the issue is:
+1. No error handlers on onSnapshot calls
+2. Firestore rules may not be deployed
+3. createNotification swallows errors silently
+
+REQUIRED FIXES (in order):
+
+**Fix 1: Add error handlers to all onSnapshot calls in NotificationContext.tsx**
+
+For every onSnapshot call, add an error handler as the second/third argument:
+
+const unsub = onSnapshot(q, (snap) => {
+  // existing handler code
+}, (error) => {
+  console.error("[NotificationContext] systemMessages listener error:", error.code, error.message);
+  // Optionally show a toast or log to a visible place
+});
+
+**Fix 2: Add error logging to createNotification in src/lib/notifications.ts**
+
+Replace the silent catch blocks with actual error logging:
+
+try {
+  const existing = await getDoc(ref);
+  if (existing.exists()) return;
+  await setDoc(ref, data);
+} catch (error) {
+  console.error("[createNotification] First attempt failed:", error.code, error.message);
+  try {
+    await setDoc(ref, data);
+  } catch (error2) {
+    console.error("[createNotification] Second attempt failed:", error2.code, error2.message);
+  }
+}
+
+**Fix 3: Clear processedRef when user changes**
+
+Add cleanup in the useEffect that listens to systemMessages:
+
+return () => {
+  unsub();
+  systemInitRef.current = false;
+  // Clear only sysmsg_ keys to avoid affecting other notification types
+  for (const key of processedRef.current) {
+    if (key.startsWith("sysmsg_")) processedRef.current.delete(key);
+  }
+};
+
+**Fix 4: Deploy Firestore rules**
+
+Run:
+firebase deploy --only firestore:rules
+
+Verify the deployment succeeded.
+
+TESTING REQUIREMENTS:
+
+1. Open browser console (F12)
+2. Send a broadcast from Admin account
+3. Open a DIFFERENT browser or incognito window as a regular user
+4. Watch the console for:
+   - Any "permission-denied" errors
+   - Any "systemMessages listener error" messages
+   - Any "createNotification failed" messages
+5. Check if the notification appears for the regular user
+
+REPORT BACK:
+
+1. All console errors (copy/paste exact text)
+2. Any Firestore permission errors
+3. Screenshot of browser console showing errors or success
+4. Confirmation: Did the regular user receive the broadcast? (Yes/No)
+5. If yes, test with a second regular user to confirm it's not a fluke
+6. The exact changes made to files (git diff or file paths)
+
+DO NOT:
+- Move to other issues
+- Fix dashboard counters
+- Fix postbacks
+- Fix task details
+- Modify package.json
+- Touch deployment
+
+ONLY FOCUS ON:
+- Broadcast delivery to regular users
+- Adding error handlers
+- Deploying Firestore rules
+- Testing with real user accounts
+
+WAIT FOR CONFIRMATION that regular users receive broadcasts before moving to any other issue.

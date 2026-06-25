@@ -66,16 +66,18 @@ export async function createNotification(payload: NotifPayload): Promise<void> {
     if (existing.exists()) return;
     // Doc confirmed not to exist — create it.
     await setDoc(ref, data);
-  } catch {
+  } catch (err) {
     // getDoc threw — most likely because the doc doesn't exist and the Firestore
     // read rule evaluated resource.data on a null resource (permission-denied).
     // Fall through to a direct setDoc: the CREATE rule checks request.resource.data
     // (the incoming payload) which is always defined and matches the user's uid.
+    const e = err as { code?: string; message?: string };
+    console.warn(`[createNotification] getDoc failed (${e?.code}): ${e?.message} — attempting direct setDoc`, { docId, type: payload.type });
     try {
       await setDoc(ref, data);
-    } catch {
-      // Truly non-critical — offline, or the doc already exists and the update
-      // rule denied the overwrite (another user's doc). Either way, safe to ignore.
+    } catch (err2) {
+      const e2 = err2 as { code?: string; message?: string };
+      console.error(`[createNotification] setDoc FAILED (${e2?.code}): ${e2?.message}`, { docId, type: payload.type, userId: payload.userId });
     }
   }
 }

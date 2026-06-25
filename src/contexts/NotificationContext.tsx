@@ -130,6 +130,8 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
           .filter((n) => !n.deletedForUser)
           .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       );
+    }, (error) => {
+      console.error("[NotificationContext] notifications listener error:", error.code, error.message);
     });
     return () => unsub();
   }, [user]);
@@ -205,6 +207,8 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       }
 
       if (isInitial) completionInitRef.current = true;
+    }, (error) => {
+      console.error("[NotificationContext] taskCompletions listener error:", error.code, error.message);
     });
 
     return () => {
@@ -255,6 +259,8 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       }
 
       if (isInitial) taskInitRef.current = true;
+    }, (error) => {
+      console.error("[NotificationContext] tasks listener error:", error.code, error.message);
     });
 
     return () => {
@@ -306,11 +312,17 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       }
 
       systemInitRef.current = true;
+    }, (error) => {
+      console.error("[NotificationContext] systemMessages listener error:", error.code, error.message);
     });
 
     return () => {
       unsub();
       systemInitRef.current = false;
+      // Clear sysmsg_ keys so broadcasts are re-evaluated on next login
+      for (const key of processedRef.current) {
+        if (key.startsWith("sysmsg_")) processedRef.current.delete(key);
+      }
     };
   }, [user]);
 
@@ -382,6 +394,8 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       }
 
       if (isInitial) withdrawalInitRef.current = true;
+    }, (error) => {
+      console.error("[NotificationContext] withdrawals listener error:", error.code, error.message);
     });
 
     return () => {
