@@ -3,8 +3,12 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     // ── Helper: check if the requesting user is an admin ──────────────────
+    // exists() guard prevents null.data.role from throwing when the user
+    // document hasn't been written yet — a thrown error in ANY expression
+    // causes the entire permission evaluation to return false in Firestore.
     function isAdmin() {
       return request.auth != null &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin";
     }
 
@@ -145,15 +149,28 @@ service cloud.firestore {
     // ── notifications/{notifId} ────────────────────────────────────────────
     // Notifications are keyed by a deterministic ID (userId_dedupeKey).
     // Users can create their own notifications and read/update (mark read/delete) them.
-    // Admins can read and manage all.
+    // Admins have full access via explicit per-operation rules (avoids the
+    // catch-all `allow read, write: if isAdmin()` pattern which forces isAdmin()
+    // to evaluate for every operation and can cascade a null-pointer failure
+    // from the isAdmin() get() call into a denial of the user's own create rule).
     match /notifications/{notifId} {
+      // Regular users: create only their own notification documents
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      // resource == null handles getDoc on non-existent docs: Firestore evaluates
-      // resource.data on null which throws in the rule engine → permission-denied.
-      // The null guard lets the existence check succeed and return {exists:false}.
+
+      // Regular users: read only their own documents.
+      // resource == null guard handles getDoc on non-existent docs — without it,
+      // resource.data throws in the rule engine and returns permission-denied.
       allow read: if isSignedIn() && (resource == null || resource.data.userId == request.auth.uid);
+
+      // Regular users: update (mark read / soft-delete) only their own documents
       allow update: if isSignedIn() && resource.data.userId == request.auth.uid;
-      allow read, write: if isAdmin();
+
+      // Regular users: delete only their own documents
+      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+
+      // Admins: full access to all notifications (explicit per-operation avoids
+      // the isAdmin() evaluation being interleaved with user-specific rules)
+      allow create, read, update, delete: if isAdmin();
     }
 
     // ── systemMessages/{msgId} ─────────────────────────────────────────────
