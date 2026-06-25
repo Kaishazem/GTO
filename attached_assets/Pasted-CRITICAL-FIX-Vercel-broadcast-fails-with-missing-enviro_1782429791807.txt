@@ -1,0 +1,77 @@
+CRITICAL FIX: Vercel broadcast fails with missing environment variable
+
+EXACT ERROR FROM CONSOLE:
+
+"Server database not configured — missing env var: FIREBASE_ADMIN_CLIENT_EMAIL"
+
+HTTP 503 (Service Unavailable) on POST /api/broadcast
+
+CONTEXT:
+- Broadcast works PERFECTLY on Replit
+- Broadcast FAILS on Vercel only
+- The serverless function (api/broadcast.js) exists but cannot find Firebase credentials
+
+ROOT CAUSE:
+The Vercel serverless function is looking for environment variables that exist in Replit Secrets but NOT in Vercel Environment Variables.
+
+REQUIRED FIX:
+
+Option A (Preferred - Fix in code):
+Modify api/broadcast.js to check for BOTH naming conventions:
+
+- FIREBASE_ADMIN_CLIENT_EMAIL (Replit)
+- FIREBASE_CLIENT_EMAIL (Vercel common naming)
+
+- FIREBASE_ADMIN_PRIVATE_KEY (Replit)
+- FIREBASE_PRIVATE_KEY (Vercel common naming)
+
+- FIREBASE_PROJECT_ID (both)
+
+Make the function flexible to accept either naming.
+
+Option B (Fix in Vercel Dashboard):
+Add these environment variables to Vercel:
+- FIREBASE_ADMIN_CLIENT_EMAIL
+- FIREBASE_ADMIN_PRIVATE_KEY
+- FIREBASE_PROJECT_ID
+
+The values should match what's in Replit Secrets.
+
+IMPLEMENTATION:
+
+1. Update api/broadcast.js to:
+   - Check for both naming conventions
+   - Provide clear error message showing which variable is missing
+   - Initialize Firebase Admin only once (module-level, not per-request)
+
+2. Add a fallback initialization:
+   const clientEmail = process.env.FIREBASE_ADMIN_CLIENT_EMAIL || process.env.FIREBASE_CLIENT_EMAIL;
+   const privateKey = process.env.FIREBASE_ADMIN_PRIVATE_KEY || process.env.FIREBASE_PRIVATE_KEY;
+   const projectId = process.env.FIREBASE_PROJECT_ID;
+
+3. If all three are missing, return clear error:
+   return res.status(503).json({ 
+     error: "Firebase credentials missing",
+     checked: {
+       FIREBASE_ADMIN_CLIENT_EMAIL: !!process.env.FIREBASE_ADMIN_CLIENT_EMAIL,
+       FIREBASE_CLIENT_EMAIL: !!process.env.FIREBASE_CLIENT_EMAIL,
+       FIREBASE_ADMIN_PRIVATE_KEY: !!process.env.FIREBASE_ADMIN_PRIVATE_KEY,
+       FIREBASE_PRIVATE_KEY: !!process.env.FIREBASE_PRIVATE_KEY,
+       FIREBASE_PROJECT_ID: !!process.env.FIREBASE_PROJECT_ID
+     }
+   });
+
+DO NOT:
+- Modify Express routes (Replit works fine)
+- Touch frontend code
+- Change Firestore rules
+- Break Replit functionality
+
+ONLY FIX:
+- Make api/broadcast.js work on Vercel by handling environment variable naming differences
+
+After fix:
+- Deploy to Vercel
+- Test broadcast from Vercel admin panel
+- Confirm users receive messages
+- Report what was changed
