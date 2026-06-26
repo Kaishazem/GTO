@@ -20,5 +20,19 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
+    watch: {
+      // Exclude Replit-internal runtime directories from Vite's file watcher.
+      // Without this, Replit's workflow logger appending a line to
+      //   .local/state/workflow-logs/**
+      // after every server console.log() causes Vite to broadcast a full-page
+      // reload to every connected browser tab — making both the admin page and
+      // the user page visibly refresh every time a broadcast is sent.
+      // Vercel is unaffected because it runs the production build (no Vite watcher).
+      ignored: [
+        "**/.local/**",
+        "**/.agents/**",
+        "**/.cache/**",
+      ],
+    },
   },
 });
