@@ -1,0 +1,217 @@
+CRITICAL — INVESTIGATION ONLY
+
+STOP ALL IMPLEMENTATION.
+
+DO NOT MODIFY ANY CODE.
+
+DO NOT CREATE COMMITS.
+
+DO NOT CHANGE DATABASE STRUCTURE.
+
+DO NOT FIX ANYTHING.
+
+I only want a complete technical investigation with evidence.
+
+---
+
+IMPORTANT
+
+AdGem has been permanently removed from this project.
+
+DO NOT inspect AdGem.
+
+DO NOT mention AdGem.
+
+ONLY inspect the currently active offer providers that are still enabled.
+
+---
+
+GOAL
+
+Determine exactly how a task travels from the platform until it reaches the user, and identify every place where information is lost, modified, hidden, or incorrectly displayed.
+
+---
+
+PART 1 — Complete Task Pipeline
+
+Trace ONE real imported offer from beginning to end.
+
+Show the complete pipeline:
+
+Platform API
+→ Raw API Response
+→ Import Logic
+→ Firestore
+→ Admin Dashboard
+→ Publish
+→ User Dashboard
+→ Start Task
+→ Report
+
+For every step provide:
+
+- file
+- function
+- Firestore collection
+- document structure
+- fields created
+- fields modified
+
+---
+
+PART 2 — Imported vs Published Tasks
+
+Determine exactly:
+
+1. Which collection stores imported tasks.
+
+2. Which collection stores published tasks.
+
+3. Which collection stores manually created tasks.
+
+4. Why Admin Dashboard → Published Tasks currently displays imported tasks instead of only tasks actually published to users.
+
+5. Show the exact query responsible.
+
+---
+
+PART 3 — Raw Platform Response
+
+Choose ONE real imported offer.
+
+Show the COMPLETE raw JSON exactly as received from the platform BEFORE any processing.
+
+Do NOT summarize it.
+
+Do NOT remove fields.
+
+---
+
+PART 4 — Firestore Comparison
+
+Show the COMPLETE Firestore document created after import.
+
+Compare it with the raw platform response.
+
+For EVERY field specify whether it is:
+
+- preserved
+- renamed
+- transformed
+- removed
+- ignored
+
+Explain WHY.
+
+---
+
+PART 5 — Original Tracking URL
+
+For the same offer show:
+
+1. Original tracking URL received from the platform.
+
+2. URL stored in Firestore.
+
+3. URL used after publishing.
+
+4. URL actually opened when the user presses Start Task.
+
+Do NOT hide or truncate URLs.
+
+Show complete values.
+
+Answer:
+
+- Are they identical?
+
+If not:
+
+- Where do they change?
+- Which function changes them?
+- Is the modification intentional?
+
+---
+
+PART 6 — Task Details
+
+List EVERY field supplied by the platform.
+
+Examples:
+
+- title
+
+- description
+
+- instructions
+
+- requirements
+
+- countries
+
+- devices
+
+- operating systems
+
+- payout
+
+- reward
+
+- estimated completion time
+
+- category
+
+- advertiser
+
+- icon
+
+- image
+
+- preview image
+
+- tracking URL
+
+- destination URL
+
+- conversion requirements
+
+- any additional metadata
+
+Then compare with what our frontend displays.
+
+List every field that exists but is NOT shown to users.
+
+---
+
+PART 7 — Report Flow
+
+Explain exactly what happens after the user presses Start Task.
+
+Trace the complete flow until reward is credited.
+
+Identify the exact step where reporting currently fails.
+
+---
+
+PART 8 — Final Technical Summary
+
+Produce a final table containing:
+
+- Problem
+- Root Cause
+- File
+- Function
+- Evidence
+- Recommended Fix
+
+---
+
+IMPORTANT
+
+Do NOT implement any fixes.
+
+Do NOT modify any code.
+
+Do NOT propose architecture changes.
+
+Only produce a complete evidence-based technical investigation.
