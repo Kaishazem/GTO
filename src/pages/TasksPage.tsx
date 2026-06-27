@@ -112,16 +112,24 @@ export default function TasksPage() {
 
   function handleStart(taskId: string, url: string) {
     let finalUrl = url;
+    console.log('[GTO Start Task] ── URL TRACE ──────────────────────────');
+    console.log('[GTO Start Task] 1. URL before modification:', url);
+    console.log('[GTO Start Task] 2. Firestore Doc ID (used as s2):', taskId);
     if (url && profile?.uid) {
       try {
         const u = new URL(url);
+        console.log('[GTO Start Task] 3. URL after base parse:', u.toString());
         u.searchParams.set("s1", profile.uid);
+        console.log('[GTO Start Task] 4. URL after s1 appended (s1 = user UID):', u.toString());
         u.searchParams.set("s2", taskId);
+        console.log('[GTO Start Task] 5. URL after s2 appended (s2 = Firestore doc id):', u.toString());
         finalUrl = u.toString();
       } catch {
-        // invalid URL — open as-is
+        console.log('[GTO Start Task] ⚠ Invalid URL — opening as-is:', url);
       }
     }
+    console.log('[GTO Start Task] 6. Final opened URL:', finalUrl);
+    console.log('[GTO Start Task] ──────────────────────────────────────');
     window.open(finalUrl, "_blank");
     setPendingConfirmTask({ id: taskId });
   }

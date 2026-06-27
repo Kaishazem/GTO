@@ -46,6 +46,12 @@ export interface Task {
   image?: string;
   conversionType?: string;
   externalId?: string;
+  // Investigation fields — stored in Firestore but previously missing from interface
+  trackingUrl?: string;
+  previewUrl?: string;
+  payout?: number;
+  platformId?: string;
+  rawPlatformResponse?: string;
 }
 
 export interface TaskCompletion {
@@ -124,6 +130,11 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
       image: data.image ? String(data.image) : undefined,
       conversionType: data.conversionType ? String(data.conversionType) : undefined,
       externalId: data.externalId ? String(data.externalId) : undefined,
+      trackingUrl: data.trackingUrl ? String(data.trackingUrl) : undefined,
+      previewUrl: data.previewUrl ? String(data.previewUrl) : undefined,
+      payout: data.payout !== undefined && data.payout !== null ? (typeof data.payout === 'number' ? data.payout : parseFloat(String(data.payout)) || 0) : undefined,
+      platformId: data.platformId ? String(data.platformId) : undefined,
+      rawPlatformResponse: data.rawPlatformResponse ? String(data.rawPlatformResponse) : undefined,
     };
   }
 

@@ -13,7 +13,7 @@ import {
   RefreshCw, Zap, AlertCircle, ShieldX, ShieldOff,
   BarChart3, Copy, Users, DollarSign, TrendingUp, ArrowDownToLine,
   AlertTriangle, Scale, Filter, Search, ChevronLeft, ChevronRight, Pencil,
-  FileDown, Check
+  FileDown, Check, Eye, ChevronDown, ChevronUp
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -493,6 +493,8 @@ export default function AdminPage() {
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
 
   const [taskSubTab, setTaskSubTab] = useState<"add" | "list" | "reviews" | "platformReviews" | "financial">("list");
+  const [debugTaskId, setDebugTaskId] = useState<string | null>(null);
+  const [rawJsonExpanded, setRawJsonExpanded] = useState(false);
   const [platformReviews, setPlatformReviews] = useState<PlatformTaskCompletion[]>([]);
   const [loadingPlatformReviews, setLoadingPlatformReviews] = useState(false);
   const [reviewingPlatformCompletionId, setReviewingPlatformCompletionId] = useState<string | null>(null);
@@ -3304,6 +3306,11 @@ export default function AdminPage() {
                           </p>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            onClick={() => { setDebugTaskId(debugTaskId === t.id ? null : t.id); setRawJsonExpanded(false); }}
+                            title="Debug: view all fields & URL trace"
+                            className={cn("p-1 transition-colors", debugTaskId === t.id ? "text-amber-400" : "text-white/30 hover:text-amber-400")}
+                          ><Eye className="w-4 h-4" /></button>
                           <button onClick={() => handleToggleTask(t.id, t.active)}
                             className={cn("w-10 h-5 rounded-full transition-all relative", t.active ? "bg-emerald-500" : "bg-white/20")}>
                             <span className={cn("absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all", t.active ? "right-0.5" : "left-0.5")} />
@@ -3335,8 +3342,200 @@ export default function AdminPage() {
                   );
                 })}</div>
             }
-          </div>
-          )}
+
+          {/* ── TASK DEBUG PANEL ──────────────────────────────────────────── */}
+          {debugTaskId && (() => {
+            const dt = tasks.find(t => t.id === debugTaskId);
+            if (!dt) return null;
+
+            let urlWithS1 = '';
+            let urlWithS2 = '';
+            try {
+              const u = new URL(dt.url || '');
+              u.searchParams.set('s1', '[USER_UID]');
+              urlWithS1 = u.toString();
+              u.searchParams.set('s2', dt.id);
+              urlWithS2 = u.toString();
+            } catch { /* invalid url */ }
+
+            const idMismatch = dt.id !== (dt.externalId || dt.id);
+
+            return (
+              <div className="mt-4 bg-amber-950/30 border border-amber-500/30 rounded-2xl p-5 space-y-6">
+                {/* Header */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Eye className="w-4 h-4 text-amber-400" />
+                    <span className="font-mono text-amber-300 text-sm font-bold">TASK DEBUG — {dt.title}</span>
+                  </div>
+                  <button onClick={() => setDebugTaskId(null)} className="text-white/30 hover:text-white text-xs">✕ Close</button>
+                </div>
+
+                {/* PART 2 — ALL FIRESTORE FIELDS */}
+                <div>
+                  <p className="text-[10px] font-bold text-white/40 uppercase tracking-widest mb-2">Part 2 — All Firestore Fields</p>
+                  <div className="grid grid-cols-1 gap-0.5 font-mono text-xs bg-black/20 rounded-xl p-3">
+                    {([
+                      ['Firestore Document ID', dt.id],
+                      ['externalId', dt.externalId || '(not set)'],
+                      ['title', dt.title],
+                      ['description', dt.description || '(empty)'],
+                      ['url', dt.url || '(empty)'],
+                      ['trackingUrl', dt.trackingUrl || '(not set — missing from Firestore)'],
+                      ['previewUrl', dt.previewUrl || '(not set — missing from Firestore)'],
+                      ['image', dt.image || '(not set)'],
+                      ['requirements', dt.requirements || '(not set)'],
+                      ['countries', dt.countries?.join(', ') || '(not set)'],
+                      ['devices', dt.devices?.join(', ') || '(not set)'],
+                      ['conversionType', dt.conversionType || '(not set)'],
+                      ['platform', dt.platform || '(not set)'],
+                      ['platformId', dt.platformId || '(not set)'],
+                      ['reward', String(dt.reward ?? '(not set)')],
+                      ['payout (platform cost)', dt.payout !== undefined ? String(dt.payout) : '(not set — missing from Firestore)'],
+                      ['status', dt.status],
+                      ['networkStatus', dt.networkStatus],
+                      ['active', String(dt.active)],
+                      ['taskType', dt.taskType || '(not set)'],
+                      ['createdAt', dt.createdAt?.toISOString() || '(not set)'],
+                      ['rawPlatformResponse', dt.rawPlatformResponse ? `✓ present (${dt.rawPlatformResponse.length} chars)` : '(not set — re-import task to capture)'],
+                    ] as [string, string][]).map(([k, v]) => (
+                      <div key={k} className="flex gap-2 py-0.5 border-b border-white/5">
+                        <span className="text-white/35 shrink-0 w-44">{k}</span>
+                        <span className={cn("break-all", v.startsWith('(not set') ? 'text-red-400/70' : 'text-amber-200')}>{v}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* PART 3 — URL TRACE */}
+                <div>
+                  <p className="text-[10px] font-bold text-white/40 uppercase tracking-widest mb-2">Part 3 — URL Trace</p>
+                  <div className="space-y-1.5">
+                    {([
+                      ['Original Platform URL (url field stored in Firestore)', dt.url || '(empty)'],
+                      ['Tracking URL (trackingUrl field)', dt.trackingUrl || '(not set — field empty or missing)'],
+                      ['Preview URL (previewUrl field)', dt.previewUrl || '(not set — field empty or missing)'],
+                      ['Current URL stored in Firestore', dt.url || '(empty)'],
+                      ['Final base URL sent to Start Task', dt.url || '(empty)'],
+                      ['After appending s1=[USER_UID]', urlWithS1 || '(cannot parse — invalid URL)'],
+                      ['After appending s2=' + dt.id + ' (Firestore ID)', urlWithS2 || '(cannot parse — invalid URL)'],
+                    ] as [string, string][]).map(([label, val]) => (
+                      <div key={label} className="bg-black/20 rounded-lg p-2 font-mono text-xs">
+                        <div className="text-white/35 text-[10px] mb-0.5">{label}</div>
+                        <div className={cn("break-all", val.startsWith('(') ? 'text-red-400/70' : 'text-cyan-300')}>{val}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {dt.trackingUrl && dt.url && dt.trackingUrl !== dt.url && (
+                    <div className="mt-2 bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-2 text-xs text-yellow-300">
+                      ⚠ <strong>trackingUrl ≠ url</strong> — The platform provided a separate tracking URL but Start Task uses only the <code>url</code> field. <code>trackingUrl</code> is stored in Firestore but never read by the frontend.
+                    </div>
+                  )}
+                  {!dt.trackingUrl && (
+                    <div className="mt-2 bg-slate-500/10 border border-slate-500/20 rounded-lg p-2 text-xs text-slate-400">
+                      ℹ trackingUrl is empty — either the platform did not supply one, or this task was imported before the field was captured.
+                    </div>
+                  )}
+                </div>
+
+                {/* PART 5 — ID INVESTIGATION */}
+                <div>
+                  <p className="text-[10px] font-bold text-white/40 uppercase tracking-widest mb-2">Part 5 — ID Investigation</p>
+                  <div className="space-y-2 font-mono text-xs">
+                    <div className="bg-black/20 rounded-lg p-3">
+                      <div className="text-white/35 text-[10px] mb-1">Firestore Document ID (Firebase auto-generated key)</div>
+                      <div className="text-emerald-300 break-all">{dt.id}</div>
+                      <div className="text-white/35 text-[10px] mt-1.5">→ Used for: Start Task button, s2 parameter, postback matching in api/postback.js</div>
+                    </div>
+                    <div className="bg-black/20 rounded-lg p-3">
+                      <div className="text-white/35 text-[10px] mb-1">externalId (Platform's own offer ID — what the platform knows)</div>
+                      <div className="text-amber-300 break-all">{dt.externalId || '(not set)'}</div>
+                      <div className="text-white/35 text-[10px] mt-1.5">→ Used for: deduplication only (firestoreWriter.js). NOT used in s2 or postback.</div>
+                    </div>
+                    <div className={cn("rounded-lg p-2 text-xs", idMismatch
+                      ? 'bg-red-500/10 border border-red-500/25 text-red-300'
+                      : 'bg-emerald-500/10 border border-emerald-500/25 text-emerald-300'
+                    )}>
+                      {idMismatch
+                        ? `⚠ MISMATCH CONFIRMED — s2 sends Firestore ID "${dt.id}" but platform knows externalId "${dt.externalId || 'N/A'}". If the platform echoes its own offer ID in the postback, it will not match.`
+                        : '✓ Firestore ID and externalId are the same for this task.'}
+                    </div>
+                  </div>
+                </div>
+
+                {/* PART 6 — IMPORT MAPPING */}
+                <div>
+                  <p className="text-[10px] font-bold text-white/40 uppercase tracking-widest mb-2">Part 6 — Import Mapping</p>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-[11px] font-mono border-collapse">
+                      <thead>
+                        <tr className="text-white/35 text-left">
+                          <th className="pb-1 pr-2">Raw Platform Field</th>
+                          <th className="pb-1 pr-2">→ Normalized</th>
+                          <th className="pb-1 pr-2">→ Firestore</th>
+                          <th className="pb-1 pr-2">→ Task Interface</th>
+                          <th className="pb-1">Current Value</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {([
+                          ['id/offer_id/campaign_id', 'externalId', 'externalId', 'externalId?', dt.externalId || '(empty)'],
+                          ['name/title/offer_name', 'title', 'title', 'title', dt.title],
+                          ['description/desc', 'description', 'description', 'description', (dt.description || '').slice(0, 50) || '(empty)'],
+                          ['payout/amount/cpa', 'payout', 'payout', '❌ NOT IN INTERFACE (was)', dt.payout !== undefined ? String(dt.payout) : '(missing — see investigation)'],
+                          ['url/click_url/link', 'url', 'url', 'url', (dt.url || '').slice(0, 60) || '(empty)'],
+                          ['image/icon/thumbnail', 'image', 'image', 'image?', dt.image ? dt.image.slice(0, 50) : '(not set)'],
+                          ['category/vertical', 'category', 'category', 'category?', dt.category || '(not set)'],
+                          ['countries/geo/geos', 'countries', 'countries', 'countries?', dt.countries?.join(', ') || '(not set)'],
+                          ['devices/os', 'devices', 'devices', 'devices?', dt.devices?.join(', ') || '(not set)'],
+                          ['requirements/instructions', 'requirements', 'requirements', 'requirements?', dt.requirements ? dt.requirements.slice(0, 50) : '(not set)'],
+                          ['tracking_url/postback_url', 'trackingUrl', 'trackingUrl', '⚠ just added', dt.trackingUrl || '(not set — was never mapped)'],
+                          ['preview_url', 'previewUrl', 'previewUrl', '⚠ just added', dt.previewUrl || '(not set — was never mapped)'],
+                          ['conversion_type', 'conversionType', 'conversionType', 'conversionType?', dt.conversionType || '(not set)'],
+                          ['(any other field)', '❌ DROPPED', '❌ NOT STORED', '❌ NEVER REACHED', 'Silently discarded by normalizer'],
+                        ] as string[][]).map((row) => (
+                          <tr key={row[0]} className="border-t border-white/5 align-top">
+                            <td className="py-1 pr-2 text-cyan-400/70">{row[0]}</td>
+                            <td className="py-1 pr-2 text-white/60">{row[1]}</td>
+                            <td className="py-1 pr-2 text-white/60">{row[2]}</td>
+                            <td className={cn("py-1 pr-2", row[3].startsWith('❌') ? 'text-red-400' : row[3].startsWith('⚠') ? 'text-yellow-400' : 'text-white/60')}>{row[3]}</td>
+                            <td className="py-1 text-white/40 break-all">{row[4]}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* RAW PLATFORM RESPONSE */}
+                <div>
+                  <p className="text-[10px] font-bold text-white/40 uppercase tracking-widest mb-2">Raw Platform Response (rawPlatformResponse)</p>
+                  {dt.rawPlatformResponse ? (
+                    <div>
+                      <button
+                        onClick={() => setRawJsonExpanded(!rawJsonExpanded)}
+                        className="flex items-center gap-1.5 text-xs text-amber-300 hover:text-amber-200 mb-2"
+                      >
+                        {rawJsonExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                        {rawJsonExpanded ? 'Collapse' : 'Expand'} Raw JSON ({dt.rawPlatformResponse.length.toLocaleString()} chars)
+                      </button>
+                      {rawJsonExpanded && (
+                        <pre className="bg-black/50 border border-white/10 rounded-xl p-4 text-xs text-green-300 overflow-auto max-h-[500px] whitespace-pre-wrap break-all font-mono">
+                          {(() => { try { return JSON.stringify(JSON.parse(dt.rawPlatformResponse!), null, 2); } catch { return dt.rawPlatformResponse; } })()}
+                        </pre>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 text-xs text-red-300">
+                      rawPlatformResponse is empty — this task was imported before Part 1 was added. Re-import this task (it will be deduplicated, so first delete it from Firestore, then import again) to capture the raw response.
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+          {/* ── END TASK DEBUG PANEL ─────────────────────────────────────── */}
+          </div>)}
 
           {taskSubTab === "reviews" && (
           <div className="bg-white/5 border border-white/10 rounded-2xl p-5">

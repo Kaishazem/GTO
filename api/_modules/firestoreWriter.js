@@ -78,6 +78,7 @@ export async function writeOffers(tasks, projectId, apiKey, logger) {
           conversionType: fsValue(task.conversionType),
           status:         fsValue(task.status || 'active'),
           createdAt:      fsValue(task.createdAt || new Date().toISOString()),
+          rawPlatformResponse: fsValue(JSON.stringify(task._raw || {})),
         },
       };
 
