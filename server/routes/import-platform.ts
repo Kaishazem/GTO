@@ -44,12 +44,26 @@ function applyMapping(
 }
 
 router.post("/", async (req: Request, res: Response): Promise<void> => {
+  console.log("[DBG:import-platform] ── ENTERED HANDLER ──────────────────────────────");
+  console.log("[DBG:import-platform] req.method:", req.method);
+  console.log("[DBG:import-platform] req.body keys:", Object.keys(req.body || {}));
+
   const { platformName, platformConfig } = req.body as {
     platformName?: string;
     platformConfig?: PlatformConfig;
   };
 
+  console.log("[DBG:import-platform] platformName:", platformName);
+  console.log("[DBG:import-platform] platformConfig?.apiBase:", platformConfig?.apiBase);
+  console.log("[DBG:import-platform] platformConfig?.authenticationType:", platformConfig?.authenticationType);
+  console.log("[DBG:import-platform] platformConfig?.requestMethod:", platformConfig?.requestMethod);
+  console.log("[DBG:import-platform] platformConfig?.apiKey (len):", platformConfig?.apiKey?.length ?? "undefined");
+  console.log("[DBG:import-platform] platformConfig?.apiKeyParam:", platformConfig?.apiKeyParam);
+  console.log("[DBG:import-platform] platformConfig?.endpoint:", platformConfig?.endpoint);
+  console.log("[DBG:import-platform] platformConfig?.responsePath:", platformConfig?.responsePath);
+
   if (!platformConfig?.apiBase) {
+    console.log("[DBG:import-platform] → RETURNING 400: missing apiBase");
     res.status(400).json({ success: false, error: "Missing platformConfig.apiBase" });
     return;
   }
@@ -70,14 +84,17 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
   } = platformConfig;
 
   try {
+    console.log("[DBG:import-platform] building URL from apiBase:", apiBase, "endpoint:", endpoint);
     const url = new URL(`${apiBase.replace(/\/$/, "")}${endpoint || ""}`);
+    console.log("[DBG:import-platform] base URL built:", url.toString());
 
-    // ── Auth ──────────────────────────────────────────────────────────
     const reqHeaders: Record<string, string> = { "Accept": "application/json", ...extraHeaders };
     let basicAuthHeader = "";
 
+    console.log("[DBG:import-platform] authenticationType:", authenticationType);
     switch (authenticationType) {
       case "queryParam":
+        console.log("[DBG:import-platform] setting queryParam:", apiKeyParam, "= (", apiKey.length, "chars)");
         if (apiKey && apiKeyParam) url.searchParams.set(apiKeyParam, apiKey);
         break;
       case "bearer":
@@ -94,24 +111,53 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
         break;
     }
 
-    // ── Extra query params ─────────────────────────────────────────────
+    console.log("[DBG:import-platform] extraParams keys:", Object.keys(extraParams));
     for (const [k, v] of Object.entries(extraParams)) {
       if (k && v !== undefined && v !== "") url.searchParams.set(k, String(v));
     }
+
+    const finalUrl = url.toString();
+    console.log("[DBG:import-platform] final URL (key masked):", finalUrl.replace(/(key|api_key|secret)=[^&]+/gi, "$1=***"));
 
     const fetchOptions: RequestInit = {
       method: requestMethod,
       headers: reqHeaders,
     };
 
-    console.log(`[import-platform] Fetching ${requestMethod} ${url.toString().replace(/(key|api_key|secret)=[^&]+/gi, "$1=***")}`);
+    console.log("[DBG:import-platform] → BEFORE fetch()");
+    let response: globalThis.Response;
+    try {
+      response = await fetch(finalUrl, fetchOptions);
+    } catch (fetchErr) {
+      const e = fetchErr as Error;
+      console.error("[DBG:import-platform] fetch() THREW EXCEPTION");
+      console.error("[DBG:import-platform] error.name   :", e?.name);
+      console.error("[DBG:import-platform] error.message:", e?.message);
+      console.error("[DBG:import-platform] error.code   :", (e as NodeJS.ErrnoException)?.code);
+      console.error("[DBG:import-platform] error.stack  :", e?.stack);
+      res.status(500).json({ success: false, error: `fetch() failed: ${e?.message}`, code: (e as NodeJS.ErrnoException)?.code });
+      return;
+    }
+    console.log("[DBG:import-platform] ← AFTER fetch() — HTTP status:", response.status, response.statusText);
 
-    const response = await fetch(url.toString(), fetchOptions);
-
-    const responseText = await response.text().catch(() => "");
+    console.log("[DBG:import-platform] → BEFORE response.text()");
+    let responseText: string;
+    try {
+      responseText = await response.text();
+    } catch (textErr) {
+      const e = textErr as Error;
+      console.error("[DBG:import-platform] response.text() THREW EXCEPTION");
+      console.error("[DBG:import-platform] error.name   :", e?.name);
+      console.error("[DBG:import-platform] error.message:", e?.message);
+      console.error("[DBG:import-platform] error.stack  :", e?.stack);
+      res.status(500).json({ success: false, error: `response.text() failed: ${e?.message}` });
+      return;
+    }
+    console.log("[DBG:import-platform] ← AFTER response.text() — length:", responseText.length);
+    console.log("[DBG:import-platform] responseText preview:", responseText.slice(0, 200));
 
     if (!response.ok) {
-      console.error(`[import-platform] HTTP ${response.status}:`, responseText.slice(0, 300));
+      console.log("[DBG:import-platform] → RETURNING 502: response not ok, status:", response.status);
       res.status(502).json({
         success: false,
         error: `Platform returned HTTP ${response.status}. Check your API key and endpoint configuration.`,
@@ -120,13 +166,18 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    // Parse JSON — give a descriptive 502 instead of an unhandled 500 when the
-    // platform returns HTML (e.g. a Cloudflare error page or login redirect).
     let data: unknown;
     try {
+      console.log("[DBG:import-platform] → BEFORE JSON.parse()");
       data = JSON.parse(responseText);
-    } catch {
-      console.error("[import-platform] Non-JSON response:", responseText.slice(0, 300));
+      console.log("[DBG:import-platform] ← AFTER JSON.parse() — type:", typeof data, Array.isArray(data) ? "(array)" : "(object)");
+    } catch (parseErr) {
+      const e = parseErr as Error;
+      console.error("[DBG:import-platform] JSON.parse() THREW EXCEPTION");
+      console.error("[DBG:import-platform] error.name   :", e?.name);
+      console.error("[DBG:import-platform] error.message:", e?.message);
+      console.error("[DBG:import-platform] error.stack  :", e?.stack);
+      console.error("[DBG:import-platform] raw text that failed:", responseText.slice(0, 300));
       res.status(502).json({
         success: false,
         error: "Platform returned a non-JSON response. Check your API base URL and endpoint path.",
@@ -135,11 +186,11 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    // ── Extract offer array from response path ─────────────────────────
     const raw = responsePath ? resolvePath(data, responsePath) : data;
+    console.log("[DBG:import-platform] after resolvePath — isArray:", Array.isArray(raw), "type:", typeof raw);
 
     if (!Array.isArray(raw)) {
-      console.warn("[import-platform] Response is not an array. Got:", JSON.stringify(data).slice(0, 300));
+      console.log("[DBG:import-platform] → RETURNING 502: not an array at responsePath:", responsePath);
       res.status(502).json({
         success: false,
         error: `Could not find offer array at path "${responsePath || "(root)"}". Check responsePath configuration.`,
@@ -148,18 +199,28 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
+    console.log("[DBG:import-platform] raw offer count:", raw.length);
     const offers = (raw as Record<string, unknown>[]).map((offer) =>
       applyMapping(offer, offerMapping as Record<string, string>)
     );
 
-    console.log(`[import-platform] ✅ platform=${platformName} found ${offers.length} offers`);
-
+    console.log("[DBG:import-platform] → RETURNING 200 with", offers.length, "offers");
     res.json({ success: true, offers, count: offers.length, platform: platformName });
+
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error("[import-platform] Error:", message);
+    const e = err as Error;
+    console.error("[DBG:import-platform] ── UNHANDLED EXCEPTION IN OUTER try/catch ──");
+    console.error("[DBG:import-platform] error.name   :", e?.name);
+    console.error("[DBG:import-platform] error.message:", e?.message);
+    console.error("[DBG:import-platform] error.code   :", (e as NodeJS.ErrnoException)?.code);
+    console.error("[DBG:import-platform] error.stack  :", e?.stack);
+    console.error("[DBG:import-platform] typeof err   :", typeof err);
+    console.error("[DBG:import-platform] err (raw)    :", err);
+    const message = e instanceof Error ? e.message : String(err);
     res.status(500).json({ success: false, error: message });
   }
+
+  console.log("[DBG:import-platform] ── HANDLER EXITED ──────────────────────────────");
 });
 
 export default router;
