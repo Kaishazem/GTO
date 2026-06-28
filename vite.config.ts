@@ -15,6 +15,12 @@ export default defineConfig({
     port: 5000,
     strictPort: false,
     allowedHosts: true,
+    proxy: {
+      "/api": {
+        target: "http://localhost:5001",
+        changeOrigin: true,
+      },
+    },
     watch: {
       // Exclude Replit-internal runtime directories from Vite's file watcher.
       // Without this, Replit's workflow logger appending a line to
