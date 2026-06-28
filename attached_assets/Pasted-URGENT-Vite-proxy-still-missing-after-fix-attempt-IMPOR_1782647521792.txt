@@ -1,0 +1,76 @@
+URGENT: Vite proxy still missing after fix attempt
+
+IMPORTANT CONTEXT:
+- This problem exists ONLY on Replit
+- Vercel works perfectly (no changes needed for Vercel)
+- The issue is that Vite dev server doesn't forward /api/* requests to Express
+
+CURRENT STATUS:
+- POST /api/import-platform still returns 404 on Replit
+- Test Connection still fails on Replit
+- The proxy was NOT successfully added to vite.config.ts
+
+YOUR TASK:
+
+1. Show me the CURRENT content of vite.config.ts
+
+2. Verify if the proxy block exists. It should look like this:
+
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    host: '0.0.0.0',
+    port: 5173,
+    strictPort: false,
+    allowedHosts: true,
+    proxy: {
+      "/api": {
+        target: "http://localhost:5001",
+        changeOrigin: true,
+      },
+    },
+  },
+})
+
+3. If the proxy block is NOT present, add it EXACTLY as shown above.
+
+4. If the proxy block IS present but not working:
+   - Check if there's a syntax error
+   - Check if it's in the correct location (inside server: {})
+   - Check if vite.config.ts was saved
+
+5. After fixing:
+   - Stop the server (Ctrl+C)
+   - Clear any cached processes: fuser -k 5000/tcp 5001/tcp 5002/tcp
+   - Run: npm run dev
+   - Wait for both [client] and [server] to start
+
+6. Test in browser:
+   - Open DevTools → Network tab
+   - Click "Test Connection" in Admin Panel
+   - Look for POST /api/import-platform
+   - Check if it returns 200 OK (not 404)
+
+REPORT BACK:
+- Full content of vite.config.ts AFTER your fix
+- Screenshot or text showing the proxy block
+- Server startup logs showing both processes
+- Network tab result showing the request succeeded or failed
+- Exact error message if still failing
+
+DO NOT:
+- Modify Vercel configuration (Vercel works fine)
+- Modify backend logic
+- Modify import logic
+- Guess what the problem is
+- Make partial changes
+- Assume it's fixed without testing
+
+ONLY:
+- Fix vite.config.ts proxy for Replit
+- Show me the actual file content
+- Add the proxy if missing
+- Test and report exact results
