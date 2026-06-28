@@ -1275,15 +1275,32 @@ export default function AdminPage() {
       const writes = Array.from(selected).map(async (idx) => {
         const offer = offers[idx];
         if (!offer) return;
-        const title = String(offer.name || offer.title || offer.offer_name || "Untitled Offer");
-        const payout = parseFloat(String(offer.payout || offer.reward || offer.amount || "0.005"));
-        const url = String(offer.link || offer.url || offer.offer_url || "");
+        // Use normalised fields the API already resolved; fall back to raw variants only if needed
+        const title       = String(offer.title       || offer.name        || offer.offer_name  || "Untitled Offer");
+        const payout      = parseFloat(String(offer.payout      || offer.reward       || offer.amount      || "0.005"));
+        const url         = String(offer.url         || offer.link        || offer.offer_url   || "");
         const description = String(offer.description || offer.requirements || "");
-        const offerId = String(offer.id || offer.offer_id || "");
+        const offerId     = String(offer.externalId  || offer.id          || offer.offer_id    || "");
+        // Additional normalised fields — captured from platform but previously discarded
+        const trackingUrl    = String(offer.trackingUrl    || offer.tracking_url    || "");
+        const previewUrl     = String(offer.previewUrl     || offer.preview_url     || "");
+        const image          = String(offer.image          || offer.icon            || offer.thumbnail || "");
+        const category       = String(offer.category       || offer.vertical        || "");
+        const conversionType = String(offer.conversionType || offer.conversion_type || "");
+        const requirements   = String(offer.requirements   || "");
+        const countries      = Array.isArray(offer.countries)
+          ? offer.countries
+          : offer.countries ? String(offer.countries).split(/[,;|]/).map((s: string) => s.trim()).filter(Boolean) : [];
+        const devices        = Array.isArray(offer.devices)
+          ? offer.devices
+          : offer.devices   ? String(offer.devices).split(/[,;|]/).map((s: string) => s.trim()).filter(Boolean)   : [];
+        // PART 1 — store the complete raw platform response (normalizer attaches _raw = original offer object)
+        const rawPlatformResponse = JSON.stringify(offer._raw ?? offer);
         await addDoc(collection(db, "tasks"), {
           title, description, url,
           platform: platformName,
           platformId,
+          payout,
           reward: payout,
           type: payout >= 0.05 ? "premium" : "simple",
           taskType: "platform",
@@ -1294,6 +1311,17 @@ export default function AdminPage() {
           importedFrom: platformId,
           offerId,
           externalId: offerId,
+          // Additional fields
+          trackingUrl,
+          previewUrl,
+          image,
+          category,
+          conversionType,
+          requirements,
+          countries,
+          devices,
+          // Full raw response — no truncation
+          rawPlatformResponse,
           createdAt: serverTimestamp(),
         });
         imported++;
