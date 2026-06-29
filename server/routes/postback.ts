@@ -1,4 +1,4 @@
-import { Router, Request, Response } from "express";
+import { Router, Request, Response, NextFunction } from "express";
 import { db } from "../firebase-admin";
 import * as admin from "firebase-admin";
 
@@ -25,6 +25,104 @@ async function getPostbackSecret(): Promise<string> {
     return "";
   }
 }
+
+// ── RAW REQUEST LOGGER — fires for EVERY method before any handler ──────────
+router.use("/", (req: Request, _res: Response, next: NextFunction): void => {
+  const allParams = { ...req.query, ...req.body } as Record<string, string>;
+
+  const lines: string[] = [];
+  lines.push("");
+  lines.push("════════════════════════════════════════════════════════════════");
+  lines.push("[POSTBACK] RAW REQUEST RECEIVED");
+  lines.push("────────────────────────────────────────────────────────────────");
+  lines.push(`Timestamp        : ${now()}`);
+  lines.push(`Method           : ${req.method}`);
+  lines.push(`Full URL         : ${req.protocol}://${req.get("host")}${req.originalUrl}`);
+  lines.push(`Client IP        : ${req.ip || req.socket?.remoteAddress || "(unknown)"}`);
+
+  lines.push("");
+  lines.push("── Headers ─────────────────────────────────────────────────────");
+  Object.entries(req.headers).forEach(([k, v]) => {
+    lines.push(`  ${k}: ${Array.isArray(v) ? v.join(", ") : v}`);
+  });
+
+  lines.push("");
+  lines.push("── Query Parameters ─────────────────────────────────────────────");
+  const queryEntries = Object.entries(req.query);
+  if (queryEntries.length === 0) {
+    lines.push("  (none)");
+  } else {
+    queryEntries.forEach(([k, v]) => lines.push(`  ${k} = ${JSON.stringify(v)}`));
+  }
+
+  lines.push("");
+  lines.push("── Request Body ─────────────────────────────────────────────────");
+  const bodyEntries = Object.entries(req.body || {});
+  if (bodyEntries.length === 0) {
+    lines.push("  (empty)");
+  } else {
+    bodyEntries.forEach(([k, v]) => lines.push(`  ${k} = ${JSON.stringify(v)}`));
+  }
+
+  lines.push("");
+  lines.push("── All Merged Params (query + body) ─────────────────────────────");
+  const allEntries = Object.entries(allParams);
+  if (allEntries.length === 0) {
+    lines.push("  (none)");
+  } else {
+    allEntries.forEach(([k, v]) => lines.push(`  ${k} = ${JSON.stringify(v)}`));
+  }
+
+  lines.push("");
+  lines.push("── Parsed Known Fields ──────────────────────────────────────────");
+  lines.push(`  offer_id       : ${allParams.offer_id       ?? "(not present)"}`);
+  lines.push(`  subid          : ${allParams.subid          ?? "(not present)"}`);
+  lines.push(`  subid1         : ${allParams.subid1         ?? "(not present)"}`);
+  lines.push(`  subid2         : ${allParams.subid2         ?? "(not present)"}`);
+  lines.push(`  s1             : ${allParams.s1             ?? "(not present)"}`);
+  lines.push(`  s2             : ${allParams.s2             ?? "(not present)"}`);
+  lines.push(`  transaction_id : ${allParams.transaction_id ?? "(not present)"}`);
+  lines.push(`  status         : ${allParams.status         ?? "(not present)"}`);
+  lines.push(`  reward         : ${allParams.reward         ?? "(not present)"}`);
+  lines.push(`  payout         : ${allParams.payout         ?? "(not present)"}`);
+  lines.push(`  commission     : ${allParams.commission     ?? "(not present)"}`);
+  lines.push(`  event          : ${allParams.event          ?? "(not present)"}`);
+  lines.push(`  platform       : ${allParams.platform       ?? "(not present)"}`);
+  lines.push(`  network        : ${allParams.network        ?? "(not present)"}`);
+  lines.push(`  user_id        : ${allParams.user_id        ?? "(not present)"}`);
+  lines.push(`  task_id        : ${allParams.task_id        ?? "(not present)"}`);
+  lines.push(`  conv_id        : ${allParams.conv_id        ?? "(not present)"}`);
+  lines.push(`  tid            : ${allParams.tid            ?? "(not present)"}`);
+  lines.push(`  amount         : ${allParams.amount         ?? "(not present)"}`);
+  lines.push(`  secret         : ${allParams.secret         ?? "(not present)"}`);
+  lines.push(`  sig            : ${allParams.sig            ?? "(not present)"}`);
+
+  lines.push("");
+  lines.push("── Any OTHER parameters not in the known list above ─────────────");
+  const knownKeys = new Set([
+    "offer_id","subid","subid1","subid2","s1","s2","transaction_id",
+    "status","reward","payout","commission","event","platform","network",
+    "user_id","task_id","conv_id","tid","amount","secret","sig",
+  ]);
+  const otherEntries = allEntries.filter(([k]) => !knownKeys.has(k));
+  if (otherEntries.length === 0) {
+    lines.push("  (none — all params matched known keys)");
+  } else {
+    otherEntries.forEach(([k, v]) => lines.push(`  ${k} = ${JSON.stringify(v)}`));
+  }
+
+  lines.push("════════════════════════════════════════════════════════════════");
+  lines.push("");
+
+  console.log(lines.join("\n"));
+  next();
+});
+
+// ── GET handler — log only (middleware above already printed everything) ─────
+router.get("/", (_req: Request, res: Response): void => {
+  console.log("[POSTBACK] GET request — no GET business logic, returning 200 OK");
+  res.status(200).send("OK");
+});
 
 router.post("/", async (req: Request, res: Response): Promise<void> => {
   const startMs = Date.now();
@@ -79,6 +177,22 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
   // ── Find the task completion ──────────────────────────────────────────
   let completionId = "";
   try {
+    // ── FIRESTORE LOOKUP LOG (before query) ───────────────────────────
+    const lookupLines: string[] = [];
+    lookupLines.push("");
+    lookupLines.push("────────────────────────────────────────────────────────────────");
+    lookupLines.push("[POSTBACK] FIRESTORE LOOKUP");
+    lookupLines.push("────────────────────────────────────────────────────────────────");
+    lookupLines.push(`  Collection      : taskCompletions`);
+    lookupLines.push(`  Filter 1        : taskId == "${taskId}"`);
+    lookupLines.push(`    └─ resolved from: task_id="${params.task_id ?? "(absent)"}" | taskId="${params.taskId ?? "(absent)"}" | s2="${params.s2 ?? "(absent)"}" | s2 raw="${params.s2 ?? "(absent)"}"`);
+    lookupLines.push(`  Filter 2        : userId == "${userId}"`);
+    lookupLines.push(`    └─ resolved from: user_id="${params.user_id ?? "(absent)"}" | userId="${params.userId ?? "(absent)"}" | s1="${params.s1 ?? "(absent)"}"`);
+    lookupLines.push(`  Filter 3        : status == "platform_pending"`);
+    lookupLines.push(`  Limit           : 1`);
+    lookupLines.push("────────────────────────────────────────────────────────────────");
+    console.log(lookupLines.join("\n"));
+
     const completionsSnap = await db.collection("taskCompletions")
       .where("taskId", "==", taskId)
       .where("userId", "==", userId)
@@ -86,9 +200,73 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
       .limit(1)
       .get();
 
+    // ── FIRESTORE RESULT LOG (after query) ────────────────────────────
+    const resultLines: string[] = [];
     if (!completionsSnap.empty) {
       completionId = completionsSnap.docs[0].id;
+      const docData = completionsSnap.docs[0].data();
+      resultLines.push(`  Result          : ✅ MATCH FOUND`);
+      resultLines.push(`  Matched doc ID  : ${completionId}`);
+      resultLines.push(`  Doc taskId      : ${docData.taskId ?? "(not in doc)"}`);
+      resultLines.push(`  Doc userId      : ${docData.userId ?? "(not in doc)"}`);
+      resultLines.push(`  Doc status      : ${docData.status ?? "(not in doc)"}`);
+      resultLines.push(`  Doc taskTitle   : ${docData.taskTitle ?? "(not in doc)"}`);
+    } else {
+      resultLines.push(`  Result          : ❌ NO MATCH FOUND`);
+      resultLines.push(`  `);
+      resultLines.push(`  Diagnosis — checking each filter independently:`);
+
+      // Check 1: any completion for this taskId?
+      try {
+        const byTask = await db.collection("taskCompletions")
+          .where("taskId", "==", taskId)
+          .limit(5)
+          .get();
+        resultLines.push(`    taskId="${taskId}" alone → ${byTask.size} doc(s) in taskCompletions`);
+        byTask.docs.slice(0, 3).forEach((d, i) => {
+          const dd = d.data();
+          resultLines.push(`      [${i}] docId=${d.id} | userId=${dd.userId} | status=${dd.status}`);
+        });
+      } catch (e) { resultLines.push(`    taskId check failed: ${e}`); }
+
+      // Check 2: any completion for this userId?
+      try {
+        const byUser = await db.collection("taskCompletions")
+          .where("userId", "==", userId)
+          .limit(5)
+          .get();
+        resultLines.push(`    userId="${userId}" alone → ${byUser.size} doc(s) in taskCompletions`);
+        byUser.docs.slice(0, 3).forEach((d, i) => {
+          const dd = d.data();
+          resultLines.push(`      [${i}] docId=${d.id} | taskId=${dd.taskId} | status=${dd.status}`);
+        });
+      } catch (e) { resultLines.push(`    userId check failed: ${e}`); }
+
+      // Check 3: platform_pending completions for this taskId with any userId?
+      try {
+        const byTaskPending = await db.collection("taskCompletions")
+          .where("taskId", "==", taskId)
+          .where("status", "==", "platform_pending")
+          .limit(5)
+          .get();
+        resultLines.push(`    taskId="${taskId}" + status="platform_pending" → ${byTaskPending.size} doc(s)`);
+        byTaskPending.docs.slice(0, 3).forEach((d, i) => {
+          const dd = d.data();
+          resultLines.push(`      [${i}] docId=${d.id} | stored userId="${dd.userId}" vs postback userId="${userId}"`);
+        });
+      } catch (e) { resultLines.push(`    pending check failed: ${e}`); }
+
+      resultLines.push(``);
+      resultLines.push(`  Likely root cause:`);
+      resultLines.push(`    • If taskId had 0 matches: s2 sent in the URL does not match any Firestore doc ID.`);
+      resultLines.push(`      CPAGrip may have sent a different value for s2 than what was appended at click time.`);
+      resultLines.push(`    • If taskId matched but userId did not: s1 value differs between click and postback.`);
+      resultLines.push(`    • If platform_pending had 0 matches: completion exists but was already settled/rejected.`);
     }
+    resultLines.push("────────────────────────────────────────────────────────────────");
+    resultLines.push("");
+    console.log(resultLines.join("\n"));
+
   } catch (err) {
     console.error("[postback] Error querying taskCompletions:", err);
   }
