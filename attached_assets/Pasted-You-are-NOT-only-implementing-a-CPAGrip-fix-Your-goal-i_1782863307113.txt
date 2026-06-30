@@ -1,0 +1,176 @@
+You are NOT only implementing a CPAGrip fix.
+
+Your goal is to redesign the backend into a Universal Postback Engine that will support multiple CPA / Offerwall / Reward networks in the future.
+
+The project will eventually integrate networks such as:
+
+- CPAGrip
+- OfferToro
+- AdGem
+- Ayet Studios
+- Lootably
+- RevU
+- Wannads
+- TimeWall
+- Adscend Media
+- and others.
+
+Therefore I do NOT want network-specific business logic spread throughout the code.
+
+========================
+GOALS
+
+1. Build a Universal Postback Parser.
+
+It should automatically recognize common parameter names used by different networks.
+
+Examples:
+
+User / Click identifiers:
+
+tracking_id
+cid
+clickid
+click_id
+subid
+sub_id
+s1+s2
+aff_sub
+aff_sub2
+
+Reward:
+
+payout
+reward
+commission
+amount
+revenue
+
+Offer:
+
+offer_id
+campaign_id
+offer
+task_id
+
+The parser should normalize all of these into ONE internal object.
+
+========================
+
+2. CPAGrip Adapter
+
+For CPAGrip specifically:
+
+The outgoing offer URL should use:
+
+tracking_id=userId|taskId
+
+NOT s1/s2 anymore.
+
+When a postback arrives:
+
+tracking_id=userId|taskId
+
+should automatically be split into:
+
+userId
+
+taskId
+
+If s1+s2 exist instead, support them for backward compatibility.
+
+========================
+
+3. GET / POST
+
+CPAGrip sends GET.
+
+Some networks send POST.
+
+The engine should support BOTH without duplicating business logic.
+
+The business logic should exist only once.
+
+========================
+
+4. Platform Detection
+
+The backend should not require a mandatory platform parameter.
+
+If the platform is detectable automatically, detect it.
+
+If not, use a small adapter/config.
+
+Do NOT reject conversions because platform is missing.
+
+========================
+
+5. Architecture
+
+I do NOT want dozens of:
+
+if(network=="...")
+
+Instead I want:
+
+Incoming Request
+
+↓
+
+Universal Parser
+
+↓
+
+Platform Adapter
+
+↓
+
+Normalized Conversion Object
+
+↓
+
+Firestore
+
+========================
+
+6. Backward compatibility
+
+Do not break existing code unless necessary.
+
+========================
+
+AFTER YOU FINISH
+
+DO NOT simply say "Done".
+
+Provide a COMPLETE report containing:
+
+1. Every file you created.
+
+2. Every file you modified.
+
+3. Every function added.
+
+4. Every function removed.
+
+5. Every function renamed.
+
+6. The final architecture.
+
+7. Explain exactly how a CPAGrip postback now flows through the backend.
+
+8. Explain exactly how adding a NEW network later will work.
+
+9. Confirm whether future networks will require:
+
+- code changes
+
+or
+
+- only a small adapter/config file.
+
+10. List any remaining weaknesses or limitations.
+
+11. Tell me if you found any other hidden bugs related to postbacks.
+
+Do not skip any of the above.
