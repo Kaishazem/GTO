@@ -1,0 +1,174 @@
+We are now finishing the Universal Postback migration and improving the task UX.
+
+Please complete ALL of the following.
+
+====================================================
+PART 1 — Finish the CPAGrip migration
+====================================================
+
+The Universal Postback Engine has already been implemented.
+
+Now complete the remaining migration.
+
+1.
+Replace every CPAGrip offer URL that currently appends:
+
+&s1=userId
+&s2=taskId
+
+with
+
+&tracking_id=userId|taskId
+
+Do NOT leave any old s1/s2 generation for CPAGrip.
+
+2.
+
+Update the Admin Dashboard instructions.
+
+Currently it still displays:
+
+{{S1}}
+{{S2}}
+
+Replace the displayed Global Postback URL with:
+
+https://YOUR_DOMAIN/api/postback?tracking_id={tracking_id}&offer_id={offer_id}&payout={payout}&password={password}
+
+Use the official CPAGrip macro syntax (single braces).
+
+3.
+
+Verify the Universal Parser correctly decodes:
+
+tracking_id=userId|taskId
+
+into
+
+userId
+
+taskId
+
+without requiring any platform parameter.
+
+====================================================
+PART 2 — Improve task UX
+====================================================
+
+Remove the old confirmation popup:
+
+"Did you complete the task?"
+
+We no longer want that popup.
+
+Instead:
+
+When the user presses Start Task:
+
+• Open the offer in a new tab.
+• Mark locally that this task has been opened.
+
+Immediately show a SECOND BUTTON next to Start Task.
+
+Current layout:
+
+[ Start Task ]
+
+New layout:
+
+[ Start Task ]   [ Completed Task ]
+
+The Completed Task button must:
+
+• remain visible permanently
+• survive page refresh
+• survive navigation
+• survive returning to the Tasks page
+
+Do NOT hide it after route changes.
+
+Persist this state.
+
+When the user presses Completed Task:
+
+• create the completion record
+• hide the task from Active Tasks
+• move it into Pending Review
+• remove the Completed Task button
+
+====================================================
+PART 3 — Task Details
+====================================================
+
+Inside the existing Show Details dialog,
+
+add
+
+Offer URL
+
+displaying the actual offer link.
+
+Requirements:
+
+• clickable
+• opens in a new tab
+• visible below description
+
+Do NOT remove Start Task.
+
+Users should have BOTH:
+
+• Start Task button
+
+and
+
+• clickable Offer URL inside details.
+
+====================================================
+PART 4 — Final report
+====================================================
+
+When finished provide a report containing:
+
+1.
+Every file modified.
+
+2.
+Every component modified.
+
+3.
+Every function changed.
+
+4.
+How tracking_id now flows from:
+
+Offer URL
+
+↓
+
+CPAGrip
+
+↓
+
+Universal Parser
+
+↓
+
+Engine
+
+↓
+
+Firestore
+
+5.
+How the new Completed Task button state is stored.
+
+6.
+Whether the old popup was completely removed.
+
+7.
+Any remaining TODO items.
+
+Do not leave any placeholder work.
+
+Finish everything completely.

@@ -3376,14 +3376,11 @@ export default function AdminPage() {
             const dt = tasks.find(t => t.id === debugTaskId);
             if (!dt) return null;
 
-            let urlWithS1 = '';
-            let urlWithS2 = '';
+            let urlWithTracking = '';
             try {
               const u = new URL(dt.url || '');
-              u.searchParams.set('s1', '[USER_UID]');
-              urlWithS1 = u.toString();
-              u.searchParams.set('s2', dt.id);
-              urlWithS2 = u.toString();
+              u.searchParams.set('tracking_id', `[USER_UID]|${dt.id}`);
+              urlWithTracking = u.toString();
             } catch { /* invalid url */ }
 
             const idMismatch = dt.id !== (dt.externalId || dt.id);
@@ -3445,8 +3442,7 @@ export default function AdminPage() {
                       ['Preview URL (previewUrl field)', dt.previewUrl || '(not set — field empty or missing)'],
                       ['Current URL stored in Firestore', dt.url || '(empty)'],
                       ['Final base URL sent to Start Task', dt.url || '(empty)'],
-                      ['After appending s1=[USER_UID]', urlWithS1 || '(cannot parse — invalid URL)'],
-                      ['After appending s2=' + dt.id + ' (Firestore ID)', urlWithS2 || '(cannot parse — invalid URL)'],
+                      ['After appending tracking_id=[USER_UID]|' + dt.id, urlWithTracking || '(cannot parse — invalid URL)'],
                     ] as [string, string][]).map(([label, val]) => (
                       <div key={label} className="bg-black/20 rounded-lg p-2 font-mono text-xs">
                         <div className="text-white/35 text-[10px] mb-0.5">{label}</div>
@@ -3473,19 +3469,19 @@ export default function AdminPage() {
                     <div className="bg-black/20 rounded-lg p-3">
                       <div className="text-white/35 text-[10px] mb-1">Firestore Document ID (Firebase auto-generated key)</div>
                       <div className="text-emerald-300 break-all">{dt.id}</div>
-                      <div className="text-white/35 text-[10px] mt-1.5">→ Used for: Start Task button, s2 parameter, postback matching in api/postback.js</div>
+                      <div className="text-white/35 text-[10px] mt-1.5">→ Used for: Start Task button, tracking_id taskId segment, postback matching in api/postback</div>
                     </div>
                     <div className="bg-black/20 rounded-lg p-3">
                       <div className="text-white/35 text-[10px] mb-1">externalId (Platform's own offer ID — what the platform knows)</div>
                       <div className="text-amber-300 break-all">{dt.externalId || '(not set)'}</div>
-                      <div className="text-white/35 text-[10px] mt-1.5">→ Used for: deduplication only (firestoreWriter.js). NOT used in s2 or postback.</div>
+                      <div className="text-white/35 text-[10px] mt-1.5">→ Used for: deduplication only (firestoreWriter.js). NOT used in tracking_id or postback.</div>
                     </div>
                     <div className={cn("rounded-lg p-2 text-xs", idMismatch
                       ? 'bg-red-500/10 border border-red-500/25 text-red-300'
                       : 'bg-emerald-500/10 border border-emerald-500/25 text-emerald-300'
                     )}>
                       {idMismatch
-                        ? `⚠ MISMATCH CONFIRMED — s2 sends Firestore ID "${dt.id}" but platform knows externalId "${dt.externalId || 'N/A'}". If the platform echoes its own offer ID in the postback, it will not match.`
+                        ? `⚠ MISMATCH CONFIRMED — tracking_id sends Firestore ID "${dt.id}" but platform knows externalId "${dt.externalId || 'N/A'}". If the platform echoes its own offer ID in the postback, it will not match.`
                         : '✓ Firestore ID and externalId are the same for this task.'}
                     </div>
                   </div>
@@ -4198,10 +4194,10 @@ export default function AdminPage() {
           <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
             <h2 className="font-semibold text-white mb-2 flex items-center gap-2"><Link2 className="w-4 h-4 text-emerald-400" />Your Postback URL</h2>
             <p className="text-xs text-white/40 mb-3">
-              Use this URL in CPAGrip's postback settings. CPAGrip macros: <code className="text-emerald-400">{"{{S1}}"}</code> = user ID, <code className="text-emerald-400">{"{{S2}}"}</code> = task ID, <code className="text-emerald-400">{"{{TRANSACTION_ID}}"}</code> = conversion ID, <code className="text-emerald-400">{"{{PAYOUT}}"}</code> = amount.
+              Use this URL in CPAGrip's Global Postback settings. CPAGrip macros: <code className="text-emerald-400">{"{tracking_id}"}</code> = combined user|task ID, <code className="text-emerald-400">{"{offer_id}"}</code> = offer ID, <code className="text-emerald-400">{"{payout}"}</code> = amount, <code className="text-emerald-400">{"{password}"}</code> = your postback secret.
             </p>
             <div className="bg-slate-900 border border-white/10 rounded-xl p-3 font-mono text-xs text-emerald-300 break-all">
-              {postbackBaseUrl}?platform=cpagrip&user_id={"{{S1}}"}&task_id={"{{S2}}"}&conv_id={"{{TRANSACTION_ID}}"}&status=approved&amount={"{{PAYOUT}}"}&secret={postbackSecret || "YOUR_SECRET"}
+              {postbackBaseUrl}?tracking_id={"{tracking_id}"}&offer_id={"{offer_id}"}&payout={"{payout}"}&password={"{password}"}
             </div>
             {platforms.length > 0 && (
               <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-3">
@@ -4472,19 +4468,16 @@ export default function AdminPage() {
           {/* ── Postback URL reference ──────────────────────────────────── */}
           <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
             <h3 className="font-semibold text-white text-sm mb-2 flex items-center gap-2"><Link2 className="w-4 h-4 text-blue-400" />Your Postback URL</h3>
-            <p className="text-xs text-white/40 mb-2">Configure this in each ad network's postback settings. Replace macros with the network's variable syntax.</p>
+            <p className="text-xs text-white/40 mb-2">Configure this in each ad network's postback settings. For CPAGrip use the Global Postback URL shown in the Import tab.</p>
             <div className="bg-slate-900 border border-white/10 rounded-xl p-3 font-mono text-xs text-emerald-300 break-all mb-3">
-              {postbackBaseUrl}?platform=PLATFORM_ID&user_id=USER_ID&task_id=TASK_ID&conv_id=CONV_ID&status=approved&amount=PAYOUT&secret={postbackSecret || "YOUR_SECRET"}
+              {postbackBaseUrl}?tracking_id=USER_ID|TASK_ID&offer_id=OFFER_ID&payout=PAYOUT&password={postbackSecret || "YOUR_SECRET"}
             </div>
             <div className="grid grid-cols-2 gap-2 text-xs text-white/50">
               {[
-                ["platform", "Your platform ID from Firestore"],
-                ["user_id", "GTO user ID (pass via macro)"],
-                ["task_id", "GTO task ID"],
-                ["conv_id", "Ad network's conversion/transaction ID"],
-                ["status", "approved or rejected"],
-                ["amount", "Payout amount in USD"],
-                ["secret", "Postback secret from Settings tab"],
+                ["tracking_id", "userId|taskId combined (pipe-separated)"],
+                ["offer_id", "Ad network's offer / campaign ID"],
+                ["payout", "Payout amount in USD"],
+                ["password", "Postback secret from Settings tab"],
                 ["sig", "Optional: HMAC-SHA256 signature"],
                 ["ts", "Optional: Unix timestamp (replay guard)"],
               ].map(([param, desc]) => (

@@ -30,12 +30,28 @@ import {
   Clock,
   ShieldCheck,
   XCircle,
-  RefreshCw,
+  Link,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type MainTab = "all" | "simple" | "premium" | "history";
 type ActivityFilter = "all" | "pending" | "approved" | "rejected";
+
+const OPENED_TASKS_KEY = "gto_opened_tasks";
+
+function loadOpenedTasks(): Set<string> {
+  try {
+    const raw = localStorage.getItem(OPENED_TASKS_KEY);
+    if (raw) return new Set(JSON.parse(raw) as string[]);
+  } catch {}
+  return new Set();
+}
+
+function saveOpenedTasks(set: Set<string>) {
+  try {
+    localStorage.setItem(OPENED_TASKS_KEY, JSON.stringify([...set]));
+  } catch {}
+}
 
 // ── Canonical status helpers ───────────────────────────────────────────────────
 
@@ -83,7 +99,7 @@ export default function TasksPage() {
   const [tab, setTab] = useState<MainTab>("all");
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>("all");
   const [completing, setCompleting] = useState<string | null>(null);
-  const [pendingConfirmTask, setPendingConfirmTask] = useState<{ id: string } | null>(null);
+  const [openedTasks, setOpenedTasks] = useState<Set<string>>(loadOpenedTasks);
   const [detailsTask, setDetailsTask] = useState<Task | null>(null);
   const [platformUserSharePercent, setPlatformUserSharePercent] = useState(65);
 
@@ -110,45 +126,45 @@ export default function TasksPage() {
     .filter((c) => matchesActivityFilter(c.status as CompletionStatus, activityFilter))
     .sort((a, b) => b.completedAt.getTime() - a.completedAt.getTime());
 
-  function handleStart(taskId: string, url: string) {
-    let finalUrl = url;
-    console.log('[GTO Start Task] ── URL TRACE ──────────────────────────');
-    console.log('[GTO Start Task] 1. URL before modification:', url);
-    console.log('[GTO Start Task] 2. Firestore Doc ID (used as s2):', taskId);
-    if (url && profile?.uid) {
-      try {
-        const u = new URL(url);
-        console.log('[GTO Start Task] 3. URL after base parse:', u.toString());
-        u.searchParams.set("s1", profile.uid);
-        console.log('[GTO Start Task] 4. URL after s1 appended (s1 = user UID):', u.toString());
-        u.searchParams.set("s2", taskId);
-        console.log('[GTO Start Task] 5. URL after s2 appended (s2 = Firestore doc id):', u.toString());
-        finalUrl = u.toString();
-      } catch {
-        console.log('[GTO Start Task] ⚠ Invalid URL — opening as-is:', url);
-      }
+  function buildOfferUrl(taskId: string, url: string): string {
+    if (!url || !profile?.uid) return url;
+    try {
+      const u = new URL(url);
+      u.searchParams.set("tracking_id", `${profile.uid}|${taskId}`);
+      return u.toString();
+    } catch {
+      return url;
     }
-    console.log('[GTO Start Task] 6. Final opened URL:', finalUrl);
-    console.log('[GTO Start Task] ──────────────────────────────────────');
-    window.open(finalUrl, "_blank");
-    setPendingConfirmTask({ id: taskId });
   }
 
-  async function handleConfirm(taskId: string) {
+  function handleStart(taskId: string, url: string) {
+    const finalUrl = buildOfferUrl(taskId, url);
+    console.log('[GTO Start Task] ── URL TRACE ──────────────────────────');
+    console.log('[GTO Start Task] 1. Raw URL:', url);
+    console.log('[GTO Start Task] 2. tracking_id:', `${profile?.uid}|${taskId}`);
+    console.log('[GTO Start Task] 3. Final URL:', finalUrl);
+    console.log('[GTO Start Task] ──────────────────────────────────────');
+    window.open(finalUrl, "_blank");
+    const next = new Set(openedTasks);
+    next.add(taskId);
+    setOpenedTasks(next);
+    saveOpenedTasks(next);
+  }
+
+  async function handleCompleteTask(taskId: string) {
     setCompleting(taskId);
-    setPendingConfirmTask(null);
     try {
       await completeTask(taskId);
+      const next = new Set(openedTasks);
+      next.delete(taskId);
+      setOpenedTasks(next);
+      saveOpenedTasks(next);
       toast({ title: "✅ Done!", description: "Task submitted — pending verification" });
     } catch (e: unknown) {
       toast({ title: "Error", description: e instanceof Error ? e.message : "Something went wrong", variant: "destructive" });
     } finally {
       setCompleting(null);
     }
-  }
-
-  function handleDidNotComplete() {
-    setPendingConfirmTask(null);
   }
 
   const availableTasks = tasks.filter((t) => !completedIds.has(t.id));
@@ -229,7 +245,8 @@ export default function TasksPage() {
               <div className="grid gap-4">
                 {filtered.map((task) => {
                   const done = completedIds.has(task.id);
-                  const isLoading = completing === task.id;
+                  const isCompleting = completing === task.id;
+                  const isOpened = openedTasks.has(task.id);
                   const displayReward = getDisplayReward(task);
                   const completion = completions.find((c) => c.taskId === task.id);
                   const statusProps = completion ? statusBadgeProps(completion.status as CompletionStatus) : null;
@@ -281,20 +298,33 @@ export default function TasksPage() {
                             Completed
                           </div>
                         ) : (
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <Button
                               size="sm"
-                              disabled={isLoading}
+                              disabled={isCompleting}
                               data-testid={`button-start-${task.id}`}
                               onClick={() => handleStart(task.id, task.url)}
                               className="bg-emerald-500 hover:bg-emerald-400 text-white rounded-xl"
                             >
-                              {isLoading ? (
-                                <><Loader2 className="w-4 h-4 animate-spin mr-1" />Submitting...</>
-                              ) : (
-                                <><ExternalLink className="w-4 h-4 mr-1" />Start Task</>
-                              )}
+                              <ExternalLink className="w-4 h-4 mr-1" />Start Task
                             </Button>
+
+                            {isOpened && (
+                              <Button
+                                size="sm"
+                                disabled={isCompleting}
+                                data-testid={`button-complete-${task.id}`}
+                                onClick={() => handleCompleteTask(task.id)}
+                                className="bg-blue-600 hover:bg-blue-500 text-white rounded-xl"
+                              >
+                                {isCompleting ? (
+                                  <><Loader2 className="w-4 h-4 animate-spin mr-1" />Submitting...</>
+                                ) : (
+                                  <><CheckCircle className="w-4 h-4 mr-1" />Completed Task</>
+                                )}
+                              </Button>
+                            )}
+
                             <Button
                               size="sm"
                               variant="outline"
@@ -342,6 +372,7 @@ export default function TasksPage() {
         const hasDevices = (dt.devices?.length ?? 0) > 0;
         const hasCategory = !!dt.category?.trim();
         const hasConversionType = !!dt.conversionType?.trim();
+        const hasUrl = !!dt.url?.trim();
         const fallbackInstructions = "Please carefully follow the instructions shown on the offer page.\n\nUsing duplicate accounts, fake information, VPNs (when prohibited), or failing to complete all requirements may result in your reward being rejected.";
 
         return (
@@ -406,6 +437,24 @@ export default function TasksPage() {
                       </p>
                     )}
                   </div>
+
+                  {/* Offer URL */}
+                  {hasUrl && (
+                    <div className="pt-1 border-t border-white/5">
+                      <p className="text-xs font-semibold text-white/40 uppercase tracking-wide mb-1.5">Offer URL</p>
+                      <a
+                        href={buildOfferUrl(dt.id, dt.url)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        data-testid={`link-offer-url-${dt.id}`}
+                        className="flex items-center gap-1.5 text-sm text-emerald-400 hover:text-emerald-300 transition-colors break-all"
+                      >
+                        <Link className="w-3.5 h-3.5 shrink-0" />
+                        <span className="truncate">{dt.url}</span>
+                        <ExternalLink className="w-3 h-3 shrink-0 ml-auto" />
+                      </a>
+                    </div>
+                  )}
 
                   {/* Requirements (if different from description) */}
                   {hasRequirements && (
@@ -479,41 +528,6 @@ export default function TasksPage() {
         );
       })()}
 
-      {/* ── TASK COMPLETION CONFIRMATION DIALOG ── */}
-      <Dialog
-        open={!!pendingConfirmTask}
-        onOpenChange={(open) => { if (!open) handleDidNotComplete(); }}
-      >
-        <DialogContent
-          className="bg-slate-900 border border-white/10 text-white max-w-sm"
-          data-testid="dialog-task-confirm"
-        >
-          <DialogHeader>
-            <DialogTitle className="text-white text-lg">Did you complete this task?</DialogTitle>
-            <DialogDescription className="text-white/50 text-sm">
-              Only confirm if you fully completed the offer in the new tab.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex flex-col gap-3 mt-2">
-            <Button
-              data-testid="button-confirm-completed"
-              onClick={() => pendingConfirmTask && handleConfirm(pendingConfirmTask.id)}
-              className="bg-emerald-500 hover:bg-emerald-400 text-white rounded-xl w-full"
-            >
-              ✅ I completed this task
-            </Button>
-            <Button
-              data-testid="button-confirm-not-completed"
-              variant="outline"
-              onClick={handleDidNotComplete}
-              className="border-white/20 text-white/70 hover:text-white hover:bg-white/10 rounded-xl w-full"
-            >
-              ❌ I did not complete this task
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
       {/* ── TASK HISTORY TAB ── */}
       {tab === "history" && (
         <div className="bg-white/5 border border-white/10 rounded-2xl p-6">
@@ -558,18 +572,12 @@ export default function TasksPage() {
                         <Badge className={cn("text-xs border flex items-center", sp.className)}>
                           {sp.icon}{sp.label}
                         </Badge>
-                        <Badge className={cn(
-                          "text-xs border",
-                          c.taskType === "manual"
-                            ? "bg-purple-500/20 text-purple-300 border-purple-500/30"
-                            : "bg-cyan-500/20 text-cyan-300 border-cyan-500/30"
-                        )}>
-                          {c.taskType === "manual" ? "Manual" : "Platform"}
-                        </Badge>
                         <span className="text-xs text-white/30">{formatDate(c.completedAt)}</span>
                       </div>
                     </div>
-                    <span className="text-sm font-semibold text-emerald-400 shrink-0">+{formatCurrency(c.reward)}</span>
+                    <div className="text-right shrink-0">
+                      <p className="text-sm font-semibold text-emerald-400">+{formatCurrency(c.reward)}</p>
+                    </div>
                   </div>
                 );
               })}
