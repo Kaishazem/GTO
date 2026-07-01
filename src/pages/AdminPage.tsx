@@ -4468,9 +4468,9 @@ export default function AdminPage() {
           {/* ── Postback URL reference ──────────────────────────────────── */}
           <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
             <h3 className="font-semibold text-white text-sm mb-2 flex items-center gap-2"><Link2 className="w-4 h-4 text-blue-400" />Your Postback URL</h3>
-            <p className="text-xs text-white/40 mb-2">Configure this in each ad network's postback settings. For CPAGrip use the Global Postback URL shown in the Import tab.</p>
+            <p className="text-xs text-white/40 mb-2">Use this URL in CPAGrip's Global Postback settings. CPAGrip macros: <code className="text-emerald-400">{"{tracking_id}"}</code> = combined user|task ID, <code className="text-emerald-400">{"{offer_id}"}</code> = offer ID, <code className="text-emerald-400">{"{payout}"}</code> = amount, <code className="text-emerald-400">{"{password}"}</code> = your postback secret.</p>
             <div className="bg-slate-900 border border-white/10 rounded-xl p-3 font-mono text-xs text-emerald-300 break-all mb-3">
-              {postbackBaseUrl}?tracking_id=USER_ID|TASK_ID&offer_id=OFFER_ID&payout=PAYOUT&password={postbackSecret || "YOUR_SECRET"}
+              {postbackBaseUrl}?tracking_id={"{tracking_id}"}&offer_id={"{offer_id}"}&payout={"{payout}"}&password={"{password}"}
             </div>
             <div className="grid grid-cols-2 gap-2 text-xs text-white/50">
               {[
@@ -4772,7 +4772,7 @@ export default function AdminPage() {
 
               <div>
                 <label className="text-sm font-medium text-white/80 block mb-1">Postback Secret Key</label>
-                <p className="text-xs text-white/40 mb-2">Include this in your postback URL as <span className="font-mono text-emerald-400">?secret=YOUR_SECRET</span></p>
+                <p className="text-xs text-white/40 mb-2">Include this in your postback URL as <span className="font-mono text-emerald-400">?password=YOUR_SECRET</span></p>
                 <Input value={postbackSecret} onChange={(e) => setPostbackSecret(e.target.value)}
                   placeholder="your-secure-secret-key"
                   className="bg-white/10 border-white/20 text-white max-w-sm font-mono text-sm" />
