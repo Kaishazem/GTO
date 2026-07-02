@@ -126,22 +126,29 @@ export default function TasksPage() {
     .filter((c) => matchesActivityFilter(c.status as CompletionStatus, activityFilter))
     .sort((a, b) => b.completedAt.getTime() - a.completedAt.getTime());
 
-  function buildOfferUrl(taskId: string, url: string): string {
+  function buildOfferUrl(taskId: string, url: string, platformId?: string): string {
     if (!url || !profile?.uid) return url;
     try {
       const u = new URL(url);
-      u.searchParams.set("tracking_id", `${profile.uid}|${taskId}`);
+      if (platformId === "ogads") {
+        // OGAds uses separate aff_sub / aff_sub2 params
+        u.searchParams.set("aff_sub", profile.uid);
+        u.searchParams.set("aff_sub2", taskId);
+      } else {
+        // CPAGrip and all other networks use combined tracking_id=userId|taskId
+        u.searchParams.set("tracking_id", `${profile.uid}|${taskId}`);
+      }
       return u.toString();
     } catch {
       return url;
     }
   }
 
-  function handleStart(taskId: string, url: string) {
-    const finalUrl = buildOfferUrl(taskId, url);
+  function handleStart(taskId: string, url: string, platformId?: string) {
+    const finalUrl = buildOfferUrl(taskId, url, platformId);
     console.log('[GTO Start Task] ── URL TRACE ──────────────────────────');
     console.log('[GTO Start Task] 1. Raw URL:', url);
-    console.log('[GTO Start Task] 2. tracking_id:', `${profile?.uid}|${taskId}`);
+    console.log('[GTO Start Task] 2. Platform:', platformId || 'default (tracking_id)');
     console.log('[GTO Start Task] 3. Final URL:', finalUrl);
     console.log('[GTO Start Task] ──────────────────────────────────────');
     window.open(finalUrl, "_blank");
@@ -303,7 +310,7 @@ export default function TasksPage() {
                               size="sm"
                               disabled={isCompleting}
                               data-testid={`button-start-${task.id}`}
-                              onClick={() => handleStart(task.id, task.url)}
+                              onClick={() => handleStart(task.id, task.url, task.platformId)}
                               className="bg-emerald-500 hover:bg-emerald-400 text-white rounded-xl"
                             >
                               <ExternalLink className="w-4 h-4 mr-1" />Start Task
@@ -443,7 +450,7 @@ export default function TasksPage() {
                     <div className="pt-1 border-t border-white/5">
                       <p className="text-xs font-semibold text-white/40 uppercase tracking-wide mb-1.5">Offer URL</p>
                       <a
-                        href={buildOfferUrl(dt.id, dt.url)}
+                        href={buildOfferUrl(dt.id, dt.url, dt.platformId)}
                         target="_blank"
                         rel="noopener noreferrer"
                         data-testid={`link-offer-url-${dt.id}`}
@@ -516,7 +523,7 @@ export default function TasksPage() {
               <div className="px-5 py-4 border-t border-white/10">
                 <Button
                   data-testid={`button-details-start-${dt.id}`}
-                  onClick={() => { setDetailsTask(null); handleStart(dt.id, dt.url); }}
+                  onClick={() => { setDetailsTask(null); handleStart(dt.id, dt.url, dt.platformId); }}
                   className="bg-emerald-500 hover:bg-emerald-400 text-white rounded-xl w-full"
                 >
                   <ExternalLink className="w-4 h-4 mr-2" />

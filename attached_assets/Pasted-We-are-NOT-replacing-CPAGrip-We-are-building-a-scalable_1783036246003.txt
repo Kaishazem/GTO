@@ -1,0 +1,157 @@
+We are NOT replacing CPAGrip.
+
+We are building a scalable multi-network CPA architecture.
+
+The goal is to add OGAds as the second supported network while keeping CPAGrip fully functional and untouched.
+
+Core Requirements
+
+1. Do NOT modify or break any existing CPAGrip functionality.
+
+2. Keep the current universal postback engine.
+
+3. Add OGAds as a completely separate adapter using the same architecture.
+
+4. Do NOT duplicate business logic.
+   The universal engine must remain network-agnostic.
+   Every network should only normalize its own data into the existing internal format.
+
+---
+
+OGAds Offer API
+
+Use the official Offer API:
+
+https://saveapp.store/api/v2
+
+Authenticate exactly as documented:
+
+Authorization: Bearer YOUR_API_KEY
+
+Import offers into the existing task system exactly like CPAGrip.
+
+---
+
+OGAds Tracking
+
+When generating an OGAds offer URL:
+
+- aff_sub = userId
+- aff_sub2 = taskId
+
+Do NOT use tracking_id for OGAds.
+
+---
+
+OGAds Postback
+
+Parse the following fields:
+
+- aff_sub → userId
+- aff_sub2 → taskId
+- offer_id
+- payout
+
+Feed these values into the existing universal engine.
+
+Do NOT create a second completion engine.
+
+---
+
+Admin Panel
+
+Platforms tab:
+
+- Support CPAGrip
+- Support OGAds
+
+Import Tasks:
+
+Allow selecting which platform to import from.
+
+---
+
+IMPORTANT
+
+Do NOT overwrite the existing CPAGrip Postback section.
+
+Instead create a separate configuration block for every supported network.
+
+The Admin panel should look like this:
+
+---
+
+CPAGrip
+
+Postback URL
+
+https://your-domain/api/postback?tracking_id={tracking_id}&offer_id={offer_id}&payout={payout}&password={password}
+
+[Copy]
+
+Instructions:
+Paste into:
+CPAGrip → Global Postback
+
+---
+
+OGAds
+
+Postback URL
+
+https://your-domain/api/postback?offer_id={offer_id}&payout={payout}&aff_sub={aff_sub}&aff_sub2={aff_sub2}
+
+[Copy]
+
+Instructions:
+Paste into:
+OGAds → Tools → Postback URL
+
+---
+
+Future networks should simply add another section below these without changing previous ones.
+
+---
+
+Architecture
+
+The backend endpoint must remain a single universal endpoint:
+
+/api/postback
+
+Each network only differs in the macros it sends.
+
+The engine detects the network automatically and routes the request through the correct adapter.
+
+---
+
+Future Scalability
+
+Design this so adding future networks requires only a new adapter.
+
+Examples:
+
+- AdGate
+- OfferToro
+- Lootably
+- TimeWall
+- AdGem
+- CPALead
+
+No changes should ever be required to the universal engine.
+
+---
+
+Final Report
+
+After implementation provide:
+
+1. Files modified.
+2. New OGAds adapter.
+3. Offer import flow.
+4. Offer URL generation.
+5. Postback parsing flow.
+6. Admin UI changes.
+7. Exact OGAds configuration required.
+8. Confirmation that CPAGrip remains fully functional and unchanged.
+9. Confirmation that future networks can be added without modifying the engine.

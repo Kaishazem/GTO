@@ -63,6 +63,8 @@ export interface NetworkAdapter {
 
 export const ADAPTERS: NetworkAdapter[] = [
   // ── CPAGrip ────────────────────────────────────────────────────────────────
+  // Tracking: tracking_id=userId|taskId (pipe-separated combined field)
+  // Postback URL: /api/postback?tracking_id={tracking_id}&offer_id={offer_id}&payout={payout}&password={password}
   {
     id: "cpagrip",
     displayName: "CPAGrip",
@@ -84,6 +86,31 @@ export const ADAPTERS: NetworkAdapter[] = [
       convId:  ["offer_id", "transaction_id", "txid"],
       payout:  ["payout"],
       status:  ["status"],
+    },
+    statusMap: {
+      "1": "approved",
+      "0": "rejected",
+      "complete": "approved",
+      "chargeback": "rejected",
+    },
+  },
+
+  // ── OGAds ─────────────────────────────────────────────────────────────────
+  // Tracking: aff_sub=userId, aff_sub2=taskId (separate params, no combined field)
+  // Postback URL: /api/postback?aff_sub={aff_sub}&aff_sub2={aff_sub2}&offer_id={offer_id}&payout={payout}&password={password}&platform=ogads
+  {
+    id: "ogads",
+    displayName: "OGAds",
+    detect: [
+      // Primary: explicit platform param (always included in the postback URL we give admins)
+      [{ paramEquals: { name: "platform", value: "ogads" } }],
+    ],
+    params: {
+      userId: ["aff_sub"],
+      taskId: ["aff_sub2"],
+      convId: ["offer_id", "transaction_id"],
+      payout: ["payout"],
+      status: ["status"],
     },
     statusMap: {
       "1": "approved",
