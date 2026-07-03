@@ -34,6 +34,11 @@ import {
   PlatformReportEntry,
   ReportComparisonResult,
 } from "@/lib/reconciliation";
+import {
+  PLATFORM_REGISTRY,
+  PLATFORM_ACCENT_ICON,
+  PLATFORM_ACCENT_TEXT,
+} from "@/lib/platforms";
 
 type TabType = "withdrawals" | "tasks" | "manualReviews" | "platforms" | "import" | "postbacks" | "settings" | "analytics" | "reconciliation" | "users" | "messages";
 
@@ -3830,6 +3835,40 @@ export default function AdminPage() {
                 <button onClick={() => setShowPlatformForm(false)} className="text-white/40 hover:text-white text-xs">✕ Cancel</button>
               </div>
 
+              {/* Quick-fill preset selector — driven by PLATFORM_REGISTRY */}
+              {PLATFORM_REGISTRY.filter((p) => p.apiDefaults).length > 0 && (
+                <div className="bg-emerald-500/8 border border-emerald-500/15 rounded-xl p-3">
+                  <p className="text-xs text-white/40 mb-2">Quick setup — click a network to auto-fill known defaults:</p>
+                  <div className="flex flex-wrap gap-2 items-center">
+                    {PLATFORM_REGISTRY.filter((p) => p.apiDefaults).map((p) => (
+                      <button key={p.id} type="button"
+                        onClick={() => {
+                          const d = p.apiDefaults!;
+                          setNewPlatform((prev) => ({
+                            ...prev,
+                            name: p.id,
+                            displayName: prev.displayName || p.displayName,
+                            apiBase: d.apiBase ?? prev.apiBase,
+                            authenticationType: (d.authType ?? prev.authenticationType) as ManagedPlatform["authenticationType"],
+                            apiKeyParam: d.apiKeyParam ?? prev.apiKeyParam,
+                            apiKeyHeaderName: d.apiKeyHeaderName ?? prev.apiKeyHeaderName,
+                            endpoint: d.endpoint ?? prev.endpoint,
+                            responsePath: d.responsePath ?? prev.responsePath,
+                            offerMappingRaw: d.fieldMapping ?? prev.offerMappingRaw,
+                            requestMethod: (d.requestMethod ?? prev.requestMethod) as "GET" | "POST",
+                            queryParamsRaw: d.queryParams ?? prev.queryParamsRaw,
+                          }));
+                          toast({ title: `✅ ${p.displayName} preset loaded`, description: "Enter your API key, then save." });
+                        }}
+                        className="text-xs bg-white/10 hover:bg-white/15 border border-white/15 text-white/70 hover:text-white px-3 py-1.5 rounded-lg transition-colors">
+                        {p.displayName}
+                      </button>
+                    ))}
+                    <span className="text-xs text-white/25 ml-1">← auto-fills form</span>
+                  </div>
+                </div>
+              )}
+
               <div className="grid md:grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs text-white/50 mb-1 block">Platform ID (unique, no spaces) *</label>
@@ -4191,64 +4230,37 @@ export default function AdminPage() {
             </div>
           </div>
 
-          {/* ── Per-network Postback URL blocks ─────────────────────────────
-               Each network gets its own block. To add a future network,
-               append another block below — no other code needs to change.
-          ─────────────────────────────────────────────────────────────── */}
-
-          {/* CPAGrip */}
-          <div className="bg-white/5 border border-white/10 rounded-2xl p-5 space-y-3">
-            <h2 className="font-semibold text-white flex items-center gap-2">
-              <Link2 className="w-4 h-4 text-emerald-400" />
-              CPAGrip — Postback URL
-            </h2>
-            <p className="text-xs text-white/40">
-              Paste into: <span className="text-white/70 font-medium">CPAGrip → Global Postback</span>
-              <br />
-              Macros: <code className="text-emerald-400">{"{tracking_id}"}</code> = user|task ID &nbsp;·&nbsp;
-              <code className="text-emerald-400">{"{offer_id}"}</code> = offer ID &nbsp;·&nbsp;
-              <code className="text-emerald-400">{"{payout}"}</code> = amount &nbsp;·&nbsp;
-              <code className="text-emerald-400">{"{password}"}</code> = postback secret
-            </p>
-            <div className="flex items-center gap-2">
-              <div className="flex-1 bg-slate-900 border border-white/10 rounded-xl p-3 font-mono text-xs text-emerald-300 break-all">
-                {postbackBaseUrl}?tracking_id={"{tracking_id}"}&offer_id={"{offer_id}"}&payout={"{payout}"}&password={"{password}"}
+          {/* ── Postback URL blocks — auto-rendered from PLATFORM_REGISTRY ──────
+               To add a new network: add ONE entry to src/lib/platforms.ts.
+               No AdminPage edits needed.
+          ─────────────────────────────────────────────────────────────────── */}
+          {PLATFORM_REGISTRY.map((config) => {
+            const fullUrl = postbackBaseUrl + config.postbackTemplate;
+            return (
+              <div key={config.id} className="bg-white/5 border border-white/10 rounded-2xl p-5 space-y-3">
+                <h2 className="font-semibold text-white flex items-center gap-2">
+                  <Link2 className={cn("w-4 h-4", PLATFORM_ACCENT_ICON[config.accentColor])} />
+                  {config.displayName} — Postback URL
+                </h2>
+                <p className="text-xs text-white/40">
+                  Paste into: <span className="text-white/70 font-medium">{config.postbackSetupHint}</span>
+                  {config.postbackNote && (
+                    <><br /><span className="text-white/30">{config.postbackNote}</span></>
+                  )}
+                </p>
+                <div className="flex items-center gap-2">
+                  <div className={cn("flex-1 bg-slate-900 border border-white/10 rounded-xl p-3 font-mono text-xs break-all", PLATFORM_ACCENT_TEXT[config.accentColor])}>
+                    {fullUrl}
+                  </div>
+                  <Button size="sm" variant="outline"
+                    onClick={() => { navigator.clipboard.writeText(fullUrl); toast({ title: "Copied!" }); }}
+                    className="border-white/20 text-white/60 hover:text-white hover:bg-white/10 rounded-xl shrink-0">
+                    <Copy className="w-3.5 h-3.5 mr-1" />Copy
+                  </Button>
+                </div>
               </div>
-              <Button size="sm" variant="outline"
-                onClick={() => { navigator.clipboard.writeText(`${postbackBaseUrl}?tracking_id={tracking_id}&offer_id={offer_id}&payout={payout}&password={password}`); toast({ title: "Copied!" }); }}
-                className="border-white/20 text-white/60 hover:text-white hover:bg-white/10 rounded-xl shrink-0">
-                <Copy className="w-3.5 h-3.5 mr-1" />Copy
-              </Button>
-            </div>
-          </div>
-
-          {/* OGAds */}
-          <div className="bg-white/5 border border-white/10 rounded-2xl p-5 space-y-3">
-            <h2 className="font-semibold text-white flex items-center gap-2">
-              <Link2 className="w-4 h-4 text-blue-400" />
-              OGAds — Postback URL
-            </h2>
-            <p className="text-xs text-white/40">
-              Paste into: <span className="text-white/70 font-medium">OGAds → Tools → Postback URL</span>
-              <br />
-              Macros: <code className="text-blue-400">{"{aff_sub}"}</code> = user ID &nbsp;·&nbsp;
-              <code className="text-blue-400">{"{aff_sub2}"}</code> = task ID &nbsp;·&nbsp;
-              <code className="text-blue-400">{"{offer_id}"}</code> = offer ID &nbsp;·&nbsp;
-              <code className="text-blue-400">{"{payout}"}</code> = amount
-              <br />
-              <span className="text-white/30">Note: <code className="text-white/40">platform=ogads</code> is a fixed literal — do not replace it with a macro.</span>
-            </p>
-            <div className="flex items-center gap-2">
-              <div className="flex-1 bg-slate-900 border border-white/10 rounded-xl p-3 font-mono text-xs text-blue-300 break-all">
-                {postbackBaseUrl}?aff_sub={"{aff_sub}"}&aff_sub2={"{aff_sub2}"}&offer_id={"{offer_id}"}&payout={"{payout}"}&password={"{password}"}&platform=ogads
-              </div>
-              <Button size="sm" variant="outline"
-                onClick={() => { navigator.clipboard.writeText(`${postbackBaseUrl}?aff_sub={aff_sub}&aff_sub2={aff_sub2}&offer_id={offer_id}&payout={payout}&password={password}&platform=ogads`); toast({ title: "Copied!" }); }}
-                className="border-white/20 text-white/60 hover:text-white hover:bg-white/10 rounded-xl shrink-0">
-                <Copy className="w-3.5 h-3.5 mr-1" />Copy
-              </Button>
-            </div>
-          </div>
+            );
+          })}
 
           {/* Platform offer fetch cards — dynamic from Firestore */}
           {platforms.length === 0 ? (

@@ -3,6 +3,7 @@ import { useTask, Task } from "@/contexts/TaskContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { formatCurrency, formatDate, userReward } from "@/lib/utils";
 import { getSettings } from "@/lib/settings";
+import { buildTrackingUrl } from "@/lib/platforms";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -127,21 +128,7 @@ export default function TasksPage() {
     .sort((a, b) => b.completedAt.getTime() - a.completedAt.getTime());
 
   function buildOfferUrl(taskId: string, url: string, platformId?: string): string {
-    if (!url || !profile?.uid) return url;
-    try {
-      const u = new URL(url);
-      if (platformId === "ogads") {
-        // OGAds uses separate aff_sub / aff_sub2 params
-        u.searchParams.set("aff_sub", profile.uid);
-        u.searchParams.set("aff_sub2", taskId);
-      } else {
-        // CPAGrip and all other networks use combined tracking_id=userId|taskId
-        u.searchParams.set("tracking_id", `${profile.uid}|${taskId}`);
-      }
-      return u.toString();
-    } catch {
-      return url;
-    }
+    return buildTrackingUrl(url, taskId, profile?.uid ?? "", platformId);
   }
 
   function handleStart(taskId: string, url: string, platformId?: string) {

@@ -1,9 +1,23 @@
 // api/_modules/postbackAdapters.js
 // Network adapter registry — pure config, no code changes to add new networks.
-// Used by both api/postback.js (Vercel) and mirrored in server/postback/ (TS).
+//
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║  Single source of truth for postback PARSING lives in:                 ║
+// ║    src/lib/platforms.ts  (TypeScript, frontend + admin UI)             ║
+// ║                                                                          ║
+// ║  This JS file mirrors only the fields needed by the postback parser:    ║
+// ║    id, displayName, detect, trackingId, params, statusMap              ║
+// ║                                                                          ║
+// ║  When adding a new network:                                              ║
+// ║    1. Add PlatformConfig to src/lib/platforms.ts  (always)             ║
+// ║    2. Add adapter here ONLY if the network uses non-standard field      ║
+// ║       names or a combined tracking param. Networks that send            ║
+// ║       ?platform=<id> with standard param names work without any entry. ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
 
 export const ADAPTERS = [
   // ── CPAGrip ────────────────────────────────────────────────────────────────
+  // trackingStrategy: combined (tracking_id=userId|taskId)
   {
     id: 'cpagrip',
     displayName: 'CPAGrip',
@@ -17,6 +31,25 @@ export const ADAPTERS = [
       convId:  ['offer_id', 'transaction_id', 'txid'],
       payout:  ['payout'],
       status:  ['status'],
+    },
+    statusMap: { '1': 'approved', '0': 'rejected', 'complete': 'approved', 'chargeback': 'rejected' },
+  },
+
+  // ── OGAds ─────────────────────────────────────────────────────────────────
+  // trackingStrategy: separate (aff_sub=userId, aff_sub2=taskId)
+  // Detected via fixed platform=ogads literal in postback URL.
+  {
+    id: 'ogads',
+    displayName: 'OGAds',
+    detect: [
+      [{ paramEquals: { name: 'platform', value: 'ogads' } }],
+    ],
+    params: {
+      userId: ['aff_sub'],
+      taskId: ['aff_sub2'],
+      convId: ['offer_id', 'transaction_id'],
+      payout: ['payout'],
+      status: ['status'],
     },
     statusMap: { '1': 'approved', '0': 'rejected', 'complete': 'approved', 'chargeback': 'rejected' },
   },

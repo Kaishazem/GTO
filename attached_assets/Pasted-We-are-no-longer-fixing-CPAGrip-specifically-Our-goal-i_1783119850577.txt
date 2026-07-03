@@ -1,0 +1,113 @@
+We are no longer fixing CPAGrip specifically.
+
+Our goal is to make the platform integration system completely generic.
+
+Do NOT modify existing CPAGrip behaviour unless necessary.
+
+I want to redesign the Platform system so that adding a new offer network requires almost zero code changes.
+
+Target architecture:
+
+1. Every platform must be represented by ONE configuration object only.
+
+That configuration must contain:
+
+- id
+- displayName
+- api settings
+- auth type
+- field mapping
+- offer URL parameter strategy
+- postback URL template
+- adapter detection rules
+- parameter mapping
+- status mapping
+
+The platform configuration should become the single source of truth.
+
+2. Remove duplicated knowledge.
+
+Currently:
+
+- parser knows platform fields
+- TasksPage knows how to build URLs
+- AdminPage knows postback URLs
+- adapters.ts knows parser mappings
+
+These must all be driven from ONE shared platform configuration.
+
+3. Offer URL generation must become generic.
+
+Instead of:
+
+if platform == ogads
+if platform == cpagrip
+...
+
+Each platform configuration must define something like:
+
+trackingStrategy:
+- tracking_id
+or
+- aff_sub
+or
+- custom
+
+TasksPage should simply ask the configuration how to build the tracking parameters.
+
+4. Postback URL display in Admin must become automatic.
+
+AdminPage must NOT hardcode:
+
+CPAGrip block
+OGAds block
+
+Instead it should iterate over platform configurations and automatically render one Postback section per platform.
+
+Adding a platform should automatically create a new postback block.
+
+5. Field Mapping defaults must come from the platform configuration.
+
+When creating a new platform from the Admin UI:
+
+Selecting the platform type should automatically populate:
+
+- field mapping
+- postback template
+- auth type
+- API endpoint (if known)
+
+The admin should only need to enter:
+
+- API Key
+- optional Base URL
+
+6. Future platform addition workflow must become:
+
+Create ONE platform configuration.
+
+Nothing else.
+
+No parser edits.
+No AdminPage edits.
+No TasksPage edits.
+No route edits.
+No engine edits.
+
+7. Existing behaviour must remain working.
+
+Do NOT break:
+
+- CPAGrip
+- OGAds
+
+Both should continue working after the refactor.
+
+8. After finishing, provide a report containing:
+
+- every file changed
+- every file removed
+- every file added
+- what became generic
+- what still requires manual work
+- whether adding the next platform requires any code changes.
