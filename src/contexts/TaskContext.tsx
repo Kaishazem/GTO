@@ -54,13 +54,34 @@ export interface Task {
   rawPlatformResponse?: string;
 }
 
+/**
+ * Task completion lifecycle statuses.
+ *
+ * Platform task state machine:
+ *   started → user_confirmed ──────────────────┐
+ *   started → postback_verified → platform_approved → approved
+ *           user_confirmed ← postback arrives ──┘
+ *
+ * Manual task state machine:
+ *   pending → approved | rejected
+ */
+export type TaskCompletionStatus =
+  | "started"           // User clicked "Start Task" — completion record created, awaiting both events
+  | "user_confirmed"    // User clicked "Completed Task" — waiting for CPA postback
+  | "postback_verified" // CPA postback received and approved — waiting for user to confirm
+  | "pending"           // Manual task submitted — awaiting admin review
+  | "platform_pending"  // Legacy: equivalent to started+user_confirmed combined (pre-redesign records)
+  | "platform_approved" // Both user confirmed AND postback verified — awaiting admin settlement
+  | "approved"          // Admin settled — reward moved to balance
+  | "rejected";         // Rejected by platform or admin
+
 export interface TaskCompletion {
   id: string;
   taskId: string;
   userId: string;
   completedAt: Date;
   reward: number;
-  status: "pending" | "platform_pending" | "platform_approved" | "approved" | "rejected";
+  status: TaskCompletionStatus;
   taskTitle?: string;
   taskDescription?: string;
   taskType?: "manual" | "platform";
@@ -78,6 +99,9 @@ interface TaskContextType {
   fetchTasks: () => Promise<void>;
   loadMoreTasks: () => Promise<void>;
   fetchCompletions: () => Promise<void>;
+  /** Create a TaskCompletion record immediately when user opens the offer URL. */
+  startTask: (taskId: string) => Promise<void>;
+  /** Mark user confirmation and advance lifecycle state. */
   completeTask: (taskId: string) => Promise<void>;
   canDoMoreTasks: boolean;
 }
@@ -196,7 +220,7 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
       userId: d.data().userId,
       completedAt: (d.data().completedAt as Timestamp)?.toDate() || new Date(),
       reward: d.data().reward || 0,
-      status: d.data().status || "pending",
+      status: (d.data().status as TaskCompletionStatus) || "pending",
       taskTitle: d.data().taskTitle,
       taskDescription: d.data().taskDescription,
       taskType: d.data().taskType,
@@ -206,26 +230,132 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     setCompletions(fetched);
   }
 
-  async function completeTask(taskId: string) {
+  /**
+   * Called when the user clicks "Start Task" and the offer URL is opened.
+   *
+   * Creates a TaskCompletion with status `started` immediately so that:
+   * - A CPA postback arriving before the user confirms can be matched.
+   * - The "Completed Task" button becomes visible without relying on localStorage.
+   *
+   * Idempotent — calling again for a `started` task is a no-op.
+   */
+  async function startTask(taskId: string) {
     if (!user || !profile) throw new Error("You must be logged in");
 
-    const alreadyDone = completions.find(
+    const existing = completions.find(
       (c) => c.taskId === taskId && c.userId === user.uid
     );
-    if (alreadyDone) throw new Error("You have already completed this task");
+
+    if (existing) {
+      if (existing.status === "started") return; // already started — idempotent
+      // Any other status means the user has already submitted or is further along
+      return;
+    }
 
     const taskDoc = await getDoc(doc(db, "tasks", taskId));
     if (!taskDoc.exists()) throw new Error("Task not found");
     const rawTask = taskDoc.data() as Record<string, unknown>;
     const taskData = taskDoc.data() as Task;
 
-    if (taskData.networkStatus !== "approved") {
-      throw new Error("This task is not approved yet");
+    if (taskData.networkStatus !== "approved") throw new Error("This task is not approved yet");
+    if (taskData.status && taskData.status !== "published") throw new Error("This task is not published yet");
+
+    const taskType = inferTaskType(rawTask);
+
+    // Only platform tasks need a `started` record — manual tasks have no postback.
+    // Manual tasks create their completion at the "Completed Task" step.
+    if (taskType !== "platform") return;
+
+    const adminReward = Number(taskData.reward || 0);
+    const settings = await getSettings();
+    const earned = userReward(adminReward, "platform", {
+      platformUserSharePercent: settings.platformTaskUserSharePercent,
+    });
+
+    await addDoc(collection(db, "taskCompletions"), {
+      taskId,
+      userId: user.uid,
+      startedAt: serverTimestamp(),
+      completedAt: serverTimestamp(),
+      reward: earned,
+      adminReward,
+      status: "started" satisfies TaskCompletionStatus,
+      taskTitle: taskData.title,
+      taskDescription: taskData.description || "",
+      taskType,
+      taskPlatform: taskData.platform,
+      manualAdminRate: taskData.manualAdminRate ?? null,
+      manualUserSharePercent: taskData.manualUserSharePercent ?? null,
+    });
+
+    // pendingBalance is NOT incremented here — only when the user confirms.
+  }
+
+  /**
+   * Called when the user clicks "Completed Task".
+   *
+   * Platform tasks:
+   *   - If `started`          → user_confirmed   (waiting for postback)
+   *   - If `postback_verified`→ platform_approved (both done — ready for admin)
+   *   - If `platform_pending` → user_confirmed   (legacy record — treat as started)
+   *
+   * Manual tasks (no existing record):
+   *   - Creates a new `pending` completion for admin review.
+   *
+   * pendingBalance is incremented here (first time user signals they finished).
+   */
+  async function completeTask(taskId: string) {
+    if (!user || !profile) throw new Error("You must be logged in");
+
+    const existing = completions.find(
+      (c) => c.taskId === taskId && c.userId === user.uid
+    );
+
+    if (existing) {
+      const s = existing.status;
+
+      // Terminal / already-submitted statuses — reject
+      if (s === "user_confirmed" || s === "platform_approved" || s === "approved") {
+        throw new Error("You have already submitted this task");
+      }
+      if (s === "rejected") {
+        throw new Error("This task was rejected and cannot be resubmitted");
+      }
+
+      // Actionable statuses: started, postback_verified, platform_pending (legacy)
+      const taskDoc = await getDoc(doc(db, "tasks", taskId));
+      if (!taskDoc.exists()) throw new Error("Task not found");
+      const taskData = taskDoc.data() as Task;
+
+      const earned = Number(existing.reward) || 0;
+      const newStatus: TaskCompletionStatus =
+        s === "postback_verified" ? "platform_approved" : "user_confirmed";
+
+      await updateDoc(doc(db, "taskCompletions", existing.id), {
+        status: newStatus,
+        completedAt: serverTimestamp(),
+        userConfirmedAt: serverTimestamp(),
+      });
+
+      // Increment pendingBalance now that user has confirmed completion
+      await updateDoc(doc(db, "users", user.uid), {
+        pendingBalance: increment(earned),
+      });
+
+      void taskData; // used for type narrowing above
+      await fetchCompletions();
+      await refreshProfile();
+      return;
     }
 
-    if (taskData.status && taskData.status !== "published") {
-      throw new Error("This task is not published yet");
-    }
+    // No existing record — create one now (manual tasks, or platform task where startTask was skipped)
+    const taskDoc = await getDoc(doc(db, "tasks", taskId));
+    if (!taskDoc.exists()) throw new Error("Task not found");
+    const rawTask = taskDoc.data() as Record<string, unknown>;
+    const taskData = taskDoc.data() as Task;
+
+    if (taskData.networkStatus !== "approved") throw new Error("This task is not approved yet");
+    if (taskData.status && taskData.status !== "published") throw new Error("This task is not published yet");
 
     const taskType = inferTaskType(rawTask);
     const adminReward = Number(taskData.reward || 0);
@@ -241,13 +371,17 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
             platformUserSharePercent: settings.platformTaskUserSharePercent,
           });
 
+    const initialStatus: TaskCompletionStatus =
+      taskType === "platform" ? "user_confirmed" : "pending";
+
     await addDoc(collection(db, "taskCompletions"), {
       taskId,
       userId: user.uid,
       completedAt: serverTimestamp(),
+      userConfirmedAt: serverTimestamp(),
       reward: earned,
       adminReward,
-      status: taskType === "platform" ? "platform_pending" : "pending",
+      status: initialStatus,
       taskTitle: taskData.title,
       taskDescription: taskData.description || "",
       taskType,
@@ -296,7 +430,7 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
         userId: d.data().userId,
         completedAt: (d.data().completedAt as Timestamp)?.toDate() || new Date(),
         reward: d.data().reward || 0,
-        status: d.data().status || "pending",
+        status: (d.data().status as TaskCompletionStatus) || "pending",
         taskTitle: d.data().taskTitle,
         taskDescription: d.data().taskDescription,
         taskType: d.data().taskType,
@@ -316,7 +450,7 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     <TaskContext.Provider
       value={{
         tasks, completions, loading, loadingMore, hasMore,
-        fetchTasks, loadMoreTasks, fetchCompletions, completeTask, canDoMoreTasks
+        fetchTasks, loadMoreTasks, fetchCompletions, startTask, completeTask, canDoMoreTasks
       }}
     >
       {children}

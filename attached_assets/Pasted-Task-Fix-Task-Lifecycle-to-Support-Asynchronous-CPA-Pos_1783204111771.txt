@@ -1,0 +1,191 @@
+Task: Fix Task Lifecycle to Support Asynchronous CPA Postbacks
+
+We are NOT adding any new CPA networks in this task.
+
+We are NOT modifying CPAGrip or OGAds integrations.
+
+The issue is in the task lifecycle architecture.
+
+Current Problem
+
+Current flow:
+
+Start Task
+→ User goes to CPA offer
+→ User completes offer
+→ CPA sends postback
+→ Engine searches for a pending completion
+→ If no pending completion exists, conversion is skipped.
+
+This is wrong because CPA networks work asynchronously.
+
+A user may:
+
+- complete the offer before pressing "Completed Task"
+- press "Completed Task" before the postback arrives
+- never return immediately after the conversion
+
+The system must support all cases.
+
+---
+
+Goal
+
+Redesign the lifecycle so postbacks and user confirmations are independent.
+
+The system must work correctly regardless of which event happens first.
+
+---
+
+Desired State Machine
+
+Each task completion should have states similar to:
+
+NOT_STARTED
+
+↓
+
+STARTED
+
+↓
+
+WAITING_FOR_USER
+or
+WAITING_FOR_POSTBACK
+
+↓
+
+VERIFIED
+
+↓
+
+REWARDED
+
+The exact names are up to you, but the logic must support asynchronous events.
+
+---
+
+Required Behaviour
+
+When Start Task is pressed
+
+Immediately create (or upsert) a TaskCompletion record.
+
+It should already exist before any CPA postback arrives.
+
+Store:
+
+- userId
+- taskId
+- platformId
+- startedAt
+- current status
+
+Do NOT wait for "Completed Task".
+
+---
+
+When user presses Completed Task
+
+Do NOT immediately reward.
+
+Only update the TaskCompletion status to indicate that the user claims completion.
+
+---
+
+When CPA postback arrives
+
+Find the TaskCompletion.
+
+If user already confirmed:
+
+→ verify
+→ reward
+
+If user has NOT confirmed:
+
+→ store CPA verification
+→ wait for user confirmation
+
+---
+
+When user confirms AFTER postback
+
+Reward immediately.
+
+---
+
+When postback arrives AFTER confirmation
+
+Reward immediately.
+
+---
+
+Important
+
+The order of these two events must no longer matter.
+
+Both of these sequences must work:
+
+Sequence A
+
+Start
+↓
+
+Completed Task
+
+↓
+
+CPA Postback
+
+↓
+
+Reward
+
+Sequence B
+
+Start
+
+↓
+
+CPA Postback
+
+↓
+
+Completed Task
+
+↓
+
+Reward
+
+---
+
+Backward Compatibility
+
+Do NOT break:
+
+- CPAGrip
+- OGAds
+- PLATFORM_REGISTRY
+- Tracking URL generation
+- Admin panel
+- Import engine
+- Postback parser
+
+Only redesign the task lifecycle.
+
+---
+
+Deliverables
+
+Provide:
+
+1. Files modified.
+2. New lifecycle diagram.
+3. New state definitions.
+4. Exact flow for:
+   - Start Task
+   - Completed Task
+   - Postback
+5. Explain how duplicate rewards are prevented.
+6. Explain why asynchronous CPA networks are now fully supported.

@@ -1,5 +1,5 @@
 - [Task interface platform fields](task-platform-fields.md) — Task interface has optional category/countries/devices/requirements/image/conversionType/externalId from import engine; mapTask reads them.
-- [Completion status flow](completion-status-flow.md) — 5 statuses: pending→platform_pending→platform_approved→approved/rejected; "pending" filter covers all 3 in-progress states.
+- [Completion status flow](completion-status-flow.md) — Async lifecycle: started→user_confirmed OR postback_verified→platform_approved→approved/rejected; pendingBalance only incremented on user confirmation.
 - [Notification system architecture](notification-architecture.md) — deduped doc IDs, onSnapshot change-detection pattern, no polling, 5 separate listeners.
 - [Firestore rules new collections](firestore-rules-additions.md) — notifications and systemMessages rules added to firestore.rules; deploy rules after any new collection.
 - [Firestore null-resource rule bug](firestore-null-resource-rule.md) — getDoc on non-existent doc fails for regular users when rule uses resource.data.X; fix: resource==null guard + fallback setDoc.

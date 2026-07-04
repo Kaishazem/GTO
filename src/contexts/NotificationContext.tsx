@@ -41,6 +41,9 @@ interface NotificationContextType {
 const NotificationContext = createContext<NotificationContextType | null>(null);
 
 type CompletionStatus =
+  | "started"
+  | "user_confirmed"
+  | "postback_verified"
   | "pending"
   | "platform_pending"
   | "platform_approved"
@@ -56,6 +59,23 @@ function completionStatusToNotif(
   const amt = formatCurrency(reward);
 
   switch (status) {
+    case "started":
+      // No notification for simply opening the offer URL
+      return null;
+    case "user_confirmed":
+      return {
+        type: "user_confirmed",
+        title: "Task Submitted",
+        message: `${name} has been submitted. We're waiting for platform verification.`,
+        icon: "⏳",
+      };
+    case "postback_verified":
+      return {
+        type: "postback_verified",
+        title: "Platform Verified ✔",
+        message: `${name} was verified by the platform. Click "Completed Task" to claim your ${amt} reward.`,
+        icon: "🔔",
+      };
     case "platform_pending":
       return {
         type: "platform_pending",

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useTask, Task } from "@/contexts/TaskContext";
+import { useTask, Task, TaskCompletionStatus } from "@/contexts/TaskContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { formatCurrency, formatDate, userReward } from "@/lib/utils";
 import { getSettings } from "@/lib/settings";
@@ -56,10 +56,26 @@ function saveOpenedTasks(set: Set<string>) {
 
 // ── Canonical status helpers ───────────────────────────────────────────────────
 
-type CompletionStatus = "pending" | "platform_pending" | "platform_approved" | "approved" | "rejected";
-
-function statusBadgeProps(status: CompletionStatus): { label: string; className: string; icon: React.ReactNode } {
+function statusBadgeProps(status: TaskCompletionStatus): { label: string; className: string; icon: React.ReactNode } {
   switch (status) {
+    case "started":
+      return {
+        label: "Started",
+        className: "bg-blue-500/20 text-blue-300 border-blue-500/30",
+        icon: <ExternalLink className="w-3 h-3 mr-1" />,
+      };
+    case "user_confirmed":
+      return {
+        label: "Awaiting Verification",
+        className: "bg-amber-500/20 text-amber-300 border-amber-500/30",
+        icon: <Clock className="w-3 h-3 mr-1" />,
+      };
+    case "postback_verified":
+      return {
+        label: "Platform Verified",
+        className: "bg-sky-500/20 text-sky-300 border-sky-500/30",
+        icon: <ShieldCheck className="w-3 h-3 mr-1" />,
+      };
     case "platform_pending":
       return {
         label: "Pending",
@@ -68,7 +84,7 @@ function statusBadgeProps(status: CompletionStatus): { label: string; className:
       };
     case "platform_approved":
       return {
-        label: "Pending",
+        label: "Under Review",
         className: "bg-amber-500/20 text-amber-300 border-amber-500/30",
         icon: <Clock className="w-3 h-3 mr-1" />,
       };
@@ -94,12 +110,15 @@ function statusBadgeProps(status: CompletionStatus): { label: string; className:
 }
 
 export default function TasksPage() {
-  const { tasks, completions, completeTask, hasMore, loadMoreTasks, loadingMore, loading } = useTask();
+  const { tasks, completions, startTask, completeTask, hasMore, loadMoreTasks, loadingMore, loading } = useTask();
   const { profile } = useAuth();
   const { toast } = useToast();
   const [tab, setTab] = useState<MainTab>("all");
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>("all");
   const [completing, setCompleting] = useState<string | null>(null);
+  const [starting, setStarting] = useState<string | null>(null);
+  // localStorage fast-path: show "Completed Task" button immediately after URL opens,
+  // before the Firestore `started` record propagates back to the UI.
   const [openedTasks, setOpenedTasks] = useState<Set<string>>(loadOpenedTasks);
   const [detailsTask, setDetailsTask] = useState<Task | null>(null);
   const [platformUserSharePercent, setPlatformUserSharePercent] = useState(65);
@@ -108,7 +127,14 @@ export default function TasksPage() {
     getSettings().then((s) => setPlatformUserSharePercent(s.platformTaskUserSharePercent ?? 65));
   }, []);
 
-  const completedIds = new Set(completions.map((c) => c.taskId));
+  // Tasks with status `started` are still in-progress from the user's perspective —
+  // they remain in the task list so the user can click "Completed Task".
+  // All other statuses mean the task is submitted/settled and should be hidden.
+  const completedIds = new Set(
+    completions
+      .filter((c) => c.status !== "started")
+      .map((c) => c.taskId)
+  );
 
   const filtered = tasks.filter((t) => {
     if (completedIds.has(t.id)) return false;
@@ -117,38 +143,63 @@ export default function TasksPage() {
     return true;
   });
 
-  function matchesActivityFilter(status: CompletionStatus, filter: ActivityFilter): boolean {
+  function matchesActivityFilter(status: TaskCompletionStatus, filter: ActivityFilter): boolean {
     if (filter === "all") return true;
-    if (filter === "pending") return status === "pending" || status === "platform_pending" || status === "platform_approved";
+    if (filter === "pending") {
+      return (
+        status === "started" ||
+        status === "user_confirmed" ||
+        status === "postback_verified" ||
+        status === "pending" ||
+        status === "platform_pending" ||
+        status === "platform_approved"
+      );
+    }
     return status === filter;
   }
 
   const activityItems = completions
-    .filter((c) => matchesActivityFilter(c.status as CompletionStatus, activityFilter))
+    .filter((c) => matchesActivityFilter(c.status as TaskCompletionStatus, activityFilter))
     .sort((a, b) => b.completedAt.getTime() - a.completedAt.getTime());
 
   function buildOfferUrl(taskId: string, url: string, platformId?: string): string {
     return buildTrackingUrl(url, taskId, profile?.uid ?? "", platformId);
   }
 
-  function handleStart(taskId: string, url: string, platformId?: string) {
+  async function handleStart(taskId: string, url: string, platformId?: string) {
     const finalUrl = buildOfferUrl(taskId, url, platformId);
     console.log('[GTO Start Task] ── URL TRACE ──────────────────────────');
     console.log('[GTO Start Task] 1. Raw URL:', url);
     console.log('[GTO Start Task] 2. Platform:', platformId || 'default (tracking_id)');
     console.log('[GTO Start Task] 3. Final URL:', finalUrl);
     console.log('[GTO Start Task] ──────────────────────────────────────');
+
+    // Open the offer URL immediately — do not block on the Firestore write
     window.open(finalUrl, "_blank");
+
+    // Optimistic UI: mark as opened in localStorage so button appears instantly
     const next = new Set(openedTasks);
     next.add(taskId);
     setOpenedTasks(next);
     saveOpenedTasks(next);
+
+    // Create the TaskCompletion record with status `started` in the background
+    setStarting(taskId);
+    try {
+      await startTask(taskId);
+    } catch (e: unknown) {
+      // Non-fatal — user can still click "Completed Task" via the localStorage fallback
+      console.warn("[GTO] startTask failed (non-fatal):", e);
+    } finally {
+      setStarting(null);
+    }
   }
 
   async function handleCompleteTask(taskId: string) {
     setCompleting(taskId);
     try {
       await completeTask(taskId);
+      // Clean up localStorage entry — Firestore completion now drives visibility
       const next = new Set(openedTasks);
       next.delete(taskId);
       setOpenedTasks(next);
@@ -240,10 +291,21 @@ export default function TasksPage() {
                 {filtered.map((task) => {
                   const done = completedIds.has(task.id);
                   const isCompleting = completing === task.id;
-                  const isOpened = openedTasks.has(task.id);
-                  const displayReward = getDisplayReward(task);
+                  const isStarting = starting === task.id;
                   const completion = completions.find((c) => c.taskId === task.id);
-                  const statusProps = completion ? statusBadgeProps(completion.status as CompletionStatus) : null;
+                  const completionStatus = completion?.status as TaskCompletionStatus | undefined;
+                  // Show "Completed Task" button when:
+                  //   - localStorage says URL was opened (fast path before Firestore propagates), OR
+                  //   - Firestore says the task is in `started` state, OR
+                  //   - Platform already verified but user hasn't confirmed yet (`postback_verified`)
+                  const isOpened = openedTasks.has(task.id);
+                  const canConfirm =
+                    isOpened ||
+                    completionStatus === "started" ||
+                    completionStatus === "postback_verified";
+                  const displayReward = getDisplayReward(task);
+                  const statusProps = completionStatus ? statusBadgeProps(completionStatus) : null;
+
                   return (
                     <div
                       key={task.id}
@@ -270,7 +332,7 @@ export default function TasksPage() {
                                 <Tag className="w-2.5 h-2.5 mr-1" />{task.category}
                               </Badge>
                             )}
-                            {done && completion && statusProps && (
+                            {completion && statusProps && (
                               <Badge className={cn("text-xs border flex items-center", statusProps.className)}>
                                 {statusProps.icon}{statusProps.label}
                               </Badge>
@@ -278,6 +340,11 @@ export default function TasksPage() {
                           </div>
                           <h3 className="font-semibold text-white text-base mb-1">{task.title}</h3>
                           <p className="text-sm text-white/50 line-clamp-2">{task.description}</p>
+                          {completionStatus === "postback_verified" && (
+                            <p className="text-xs text-sky-400 mt-1 font-medium">
+                              ✔ Platform verified — click "Completed Task" to claim your reward
+                            </p>
+                          )}
                         </div>
                         <div className="shrink-0 text-right">
                           <div className="text-lg font-bold text-emerald-400">+{formatCurrency(displayReward)}</div>
@@ -295,21 +362,30 @@ export default function TasksPage() {
                           <div className="flex items-center gap-2 flex-wrap">
                             <Button
                               size="sm"
-                              disabled={isCompleting}
+                              disabled={isCompleting || isStarting}
                               data-testid={`button-start-${task.id}`}
                               onClick={() => handleStart(task.id, task.url, task.platformId)}
                               className="bg-emerald-500 hover:bg-emerald-400 text-white rounded-xl"
                             >
-                              <ExternalLink className="w-4 h-4 mr-1" />Start Task
+                              {isStarting ? (
+                                <><Loader2 className="w-4 h-4 animate-spin mr-1" />Opening...</>
+                              ) : (
+                                <><ExternalLink className="w-4 h-4 mr-1" />Start Task</>
+                              )}
                             </Button>
 
-                            {isOpened && (
+                            {canConfirm && (
                               <Button
                                 size="sm"
                                 disabled={isCompleting}
                                 data-testid={`button-complete-${task.id}`}
                                 onClick={() => handleCompleteTask(task.id)}
-                                className="bg-blue-600 hover:bg-blue-500 text-white rounded-xl"
+                                className={cn(
+                                  "text-white rounded-xl",
+                                  completionStatus === "postback_verified"
+                                    ? "bg-sky-600 hover:bg-sky-500"
+                                    : "bg-blue-600 hover:bg-blue-500"
+                                )}
                               >
                                 {isCompleting ? (
                                   <><Loader2 className="w-4 h-4 animate-spin mr-1" />Submitting...</>
@@ -532,7 +608,7 @@ export default function TasksPage() {
             {(["all", "pending", "approved", "rejected"] as const).map((f) => {
               const count = f === "all"
                 ? completions.length
-                : completions.filter((c) => matchesActivityFilter(c.status as CompletionStatus, f)).length;
+                : completions.filter((c) => matchesActivityFilter(c.status as TaskCompletionStatus, f)).length;
               return (
                 <button
                   key={f}
@@ -555,7 +631,7 @@ export default function TasksPage() {
           ) : (
             <div className="space-y-3">
               {activityItems.map((c) => {
-                const sp = statusBadgeProps(c.status as CompletionStatus);
+                const sp = statusBadgeProps(c.status as TaskCompletionStatus);
                 return (
                   <div key={c.id} className="flex items-center justify-between gap-3 py-3 border-b border-white/5 last:border-0">
                     <div className="min-w-0 flex-1">

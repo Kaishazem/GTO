@@ -3,6 +3,8 @@ import { db } from "@/lib/firebase";
 
 export type NotifType =
   | "task_submitted"
+  | "user_confirmed"
+  | "postback_verified"
   | "platform_approved"
   | "platform_rejected"
   | "platform_pending"

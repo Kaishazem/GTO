@@ -200,7 +200,7 @@ function AdminDashboard() {
           getDocs(collection(db, "users")),
           getDocs(query(
             collection(db, "taskCompletions"),
-            where("status", "in", ["pending", "platform_pending", "platform_approved"])
+            where("status", "in", ["started", "user_confirmed", "postback_verified", "pending", "platform_pending", "platform_approved"])
           )),
           getDocs(query(
             collection(db, "taskCompletions"),
@@ -266,11 +266,11 @@ function AdminDashboard() {
   useEffect(() => {
     const q = query(
       collection(db, "taskCompletions"),
-      where("status", "in", ["pending", "platform_pending", "platform_approved"])
+      where("status", "in", ["started", "user_confirmed", "postback_verified", "pending", "platform_pending", "platform_approved"])
     );
     const unsub = onSnapshot(q, (snap) => {
       const data = snap.docs.map((d) => d.data());
-      const platformPending  = data.filter((c) => c.status === "platform_pending").length;
+      const platformPending  = data.filter((c) => ["started", "user_confirmed", "postback_verified", "platform_pending"].includes(c.status)).length;
       const platformApproved = data.filter((c) => c.status === "platform_approved").length;
       const manualPending    = data.filter((c) => c.status === "pending").length;
       setStats((prev) => ({ ...prev, platformPending, platformApproved, manualPending }));

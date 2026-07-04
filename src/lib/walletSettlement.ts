@@ -30,7 +30,15 @@ type CompletionDoc = {
   taskTitle?: string;
   taskType?: "manual" | "platform";
   reward?: number;
-  status?: "pending" | "platform_pending" | "platform_approved" | "approved" | "rejected";
+  status?:
+    | "started"
+    | "user_confirmed"
+    | "postback_verified"
+    | "pending"
+    | "platform_pending"
+    | "platform_approved"
+    | "approved"
+    | "rejected";
   settlementStatus?: SettlementAction;
   settlementDecision?: SettlementAction;
 };

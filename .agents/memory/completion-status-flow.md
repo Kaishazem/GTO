@@ -1,20 +1,42 @@
 ---
 name: Completion status flow
-description: The 5 TaskCompletion statuses and how they map to UI filters/badges
+description: Async lifecycle for task completions — both event orderings supported, how pendingBalance is managed, what each status means.
 ---
 
-TaskCompletion.status has 5 values:
-1. `pending` — manual task, awaiting admin review
-2. `platform_pending` — platform task, awaiting platform postback
-3. `platform_approved` — platform approved, awaiting admin wallet settlement
-4. `approved` — admin settled, reward credited to wallet
-5. `rejected` — rejected by platform OR admin (full settle reverses any hold)
+## Status Machine (redesigned for async CPA postbacks)
 
-UI filter mapping in TasksPage:
-- "In Progress" filter covers: pending, platform_pending, platform_approved
-- "Approved" filter: approved only
-- "Rejected" filter: rejected only
+### Platform tasks (CPA/offerwall)
+```
+started
+  ├── postback arrives first → postback_verified → (user confirms) → platform_approved
+  └── user confirms first   → user_confirmed    → (postback arrives) → platform_approved
+                                                                             ↓
+                                                                        approved (admin settles)
+                                                                        rejected
+```
 
-**Why:** Users don't need to understand the internal two-step; they just care if the task is in flight, approved, or rejected.
+### Manual tasks (unchanged)
+```
+pending → approved | rejected
+```
 
-**How to apply:** `matchesActivityFilter()` in TasksPage.tsx handles this mapping. Don't split pending/platform_pending/platform_approved into separate user-facing filters.
+### Legacy status
+`platform_pending` = pre-redesign combined start+confirm. Engine treats it as `user_confirmed`.
+
+## Key Rules
+
+- `startTask()` creates a `started` record immediately when user opens the offer URL. No pendingBalance change.
+- `completeTask()` advances the status and increments pendingBalance (only once, at user confirmation).
+- Engine on approved postback: if `user_confirmed` → `platform_approved` (both done); if `started`/`platform_pending` → `postback_verified`.
+- Engine on rejected postback when user already confirmed: reverses pendingBalance via Admin SDK transaction.
+- `platform_approved` is the only status admin can settle.
+
+## "In Progress" UI filter covers
+`started`, `user_confirmed`, `postback_verified`, `pending`, `platform_pending`, `platform_approved`
+
+## Duplicate Reward Prevention
+1. `postbackConversions` dedupKey prevents double postback processing.
+2. `walletSettlement.ts` `settlementStatus` guard prevents double settlement.
+3. `pendingBalance` incremented only once at user confirmation.
+
+**Why:** CPA networks are async — postback may arrive before or after user clicks "Completed Task". The old design skipped conversions when no pending completion existed at postback time.

@@ -5,14 +5,13 @@
 // It is intentionally HTTP-agnostic: it receives a plain param map and returns
 // a plain result object.  The Express route calls it for both GET and POST.
 //
-// Flow:
-//   params (merged GET + POST)
-//     → parsePostback()          universal normalisation
-//     → secret validation        optional per-network password check
-//     → deduplication            idempotency guard
-//     → Firestore lookup         find pending taskCompletion
-//     → settlement               update status, write conversion record + log
-//     → EngineResult             returned to the caller (route)
+// Async lifecycle (as of redesign):
+//   1. User clicks "Start Task"  → TaskCompletion created with status `started`
+//   2a. Postback arrives FIRST   → status → `postback_verified`   (stored, awaits user)
+//   2b. User confirms FIRST      → status → `user_confirmed`       (awaits postback)
+//   3.  Second event arrives     → status → `platform_approved`    (ready for admin)
+//
+// Both orderings are fully supported and produce the same final result.
 
 import * as admin from "firebase-admin";
 import { db } from "../firebase-admin";
@@ -26,6 +25,7 @@ export interface EngineResult {
   ok: boolean;
   status:
     | "settled"
+    | "postback_stored"
     | "rejected"
     | "duplicate"
     | "skipped"
@@ -173,27 +173,60 @@ async function writeLog(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Settlement helpers
+// Completion lookup
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function findPendingCompletion(userId: string, taskId: string): Promise<string> {
-  if (!db) return "";
+interface CompletionInfo {
+  id: string;
+  status: string;
+  reward: number;
+}
+
+/**
+ * Find any TaskCompletion that is still awaiting resolution for the given
+ * user+task pair.  Includes all intermediate (non-terminal) statuses so that
+ * postbacks arriving in either order are handled correctly.
+ */
+async function findActiveCompletion(
+  userId: string,
+  taskId: string
+): Promise<CompletionInfo | null> {
+  if (!db) return null;
   try {
     const snap = await db
       .collection("taskCompletions")
       .where("taskId", "==", taskId)
       .where("userId", "==", userId)
-      .where("status", "in", ["pending", "platform_pending"])
+      .where("status", "in", [
+        "started",          // new: user opened the offer URL
+        "user_confirmed",   // new: user clicked "Completed Task", awaiting postback
+        "postback_verified",// new: postback arrived, awaiting user confirmation
+        "platform_pending", // legacy: combined start+confirm from pre-redesign records
+      ])
       .limit(1)
       .get();
-    return snap.empty ? "" : snap.docs[0].id;
+    if (snap.empty) return null;
+    const d = snap.docs[0];
+    return {
+      id: d.id,
+      status: d.data().status as string,
+      reward: Number(d.data().reward || 0),
+    };
   } catch (err) {
-    console.warn("[engine] findPendingCompletion error:", err);
-    return "";
+    console.warn("[engine] findActiveCompletion error:", err);
+    return null;
   }
 }
 
-async function settleApproved(
+// ─────────────────────────────────────────────────────────────────────────────
+// Settlement helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Postback arrived and user has already confirmed → both sides done.
+ * Advance directly to `platform_approved` (ready for admin settlement).
+ */
+async function settleFullyVerified(
   completionId: string,
   parsed: ParsedConversion
 ): Promise<void> {
@@ -208,11 +241,82 @@ async function settleApproved(
       postbackConvId: parsed.convId,
       postbackAmount: parsed.payout,
     });
+    console.log(`[engine] ✅ fully verified → platform_approved | completion=${completionId}`);
   } catch (err) {
-    console.error("[engine] settleApproved failed:", err);
+    console.error("[engine] settleFullyVerified failed:", err);
   }
 }
 
+/**
+ * Postback arrived but user has NOT yet confirmed.
+ * Store the verification on the record and wait for user confirmation.
+ */
+async function settlePostbackOnly(
+  completionId: string,
+  parsed: ParsedConversion
+): Promise<void> {
+  if (!db || !completionId) return;
+  try {
+    await db.collection("taskCompletions").doc(completionId).update({
+      status: "postback_verified",
+      verifiedBy: parsed.platformId,
+      platformVerifiedAt: admin.firestore.FieldValue.serverTimestamp(),
+      platformVerifiedBy: parsed.platformId,
+      platformName: parsed.displayName,
+      postbackConvId: parsed.convId,
+      postbackAmount: parsed.payout,
+    });
+    console.log(`[engine] 📦 postback stored → postback_verified | completion=${completionId} (awaiting user confirmation)`);
+  } catch (err) {
+    console.error("[engine] settlePostbackOnly failed:", err);
+  }
+}
+
+/**
+ * Platform rejected — if user had already confirmed we must reverse the
+ * pending balance increment that happened at confirmation time.
+ */
+async function settleRejectedWithReversal(
+  completionId: string,
+  parsed: ParsedConversion,
+  reward: number
+): Promise<void> {
+  if (!db || !completionId) return;
+  try {
+    const completionRef = db.collection("taskCompletions").doc(completionId);
+    const completionSnap = await completionRef.get();
+    if (!completionSnap.exists) return;
+
+    const userId = completionSnap.data()?.userId as string;
+    if (!userId) return;
+
+    await db.runTransaction(async (tx) => {
+      tx.update(completionRef, {
+        status: "rejected",
+        verifiedBy: parsed.platformId,
+        platformVerifiedAt: admin.firestore.FieldValue.serverTimestamp(),
+        platformName: parsed.displayName,
+        postbackConvId: parsed.convId,
+        rejectReason: "Rejected by platform",
+      });
+
+      // Reverse the pendingBalance that was added when the user confirmed
+      if (reward > 0) {
+        const userRef = db!.collection("users").doc(userId);
+        tx.update(userRef, {
+          pendingBalance: admin.firestore.FieldValue.increment(-reward),
+        });
+      }
+    });
+    console.log(`[engine] ❌ rejected + pendingBalance reversed | completion=${completionId} reward=${reward}`);
+  } catch (err) {
+    console.error("[engine] settleRejectedWithReversal failed:", err);
+  }
+}
+
+/**
+ * Platform rejected but user had not yet confirmed — no balance to reverse.
+ */
 async function settleRejected(
   completionId: string,
   parsed: ParsedConversion
@@ -263,6 +367,10 @@ function logParsed(parsed: ParsedConversion, method: string, fullUrl: string): v
 
 /**
  * Process a postback from any CPA/offerwall network.
+ *
+ * Supports both ordering of events:
+ *   Sequence A: Start → Completed Task → Postback → Reward (platform_approved)
+ *   Sequence B: Start → Postback → Completed Task → Reward (platform_approved)
  *
  * @param rawParams  Merged GET query + POST body (string values only).
  * @param meta       HTTP metadata for logging only (method, fullUrl).
@@ -340,48 +448,110 @@ export async function processPostback(
     };
   }
 
-  // ── Find pending task completion ─────────────────────────────────────────
-  const completionId = parsed.userId && parsed.taskId
-    ? await findPendingCompletion(parsed.userId, parsed.taskId)
-    : "";
+  // ── Find active task completion ──────────────────────────────────────────
+  const completion = parsed.userId && parsed.taskId
+    ? await findActiveCompletion(parsed.userId, parsed.taskId)
+    : null;
 
-  // ── Settle ───────────────────────────────────────────────────────────────
+  // ── Approved postback ─────────────────────────────────────────────────────
   if (parsed.status === "approved") {
-    await settleApproved(completionId, parsed);
-    await writeConversion(dedupKey, parsed, completionId, completionId ? "settled" : "skipped", Date.now() - startMs, receivedAt);
-    const logType = completionId ? "settled" : "skipped";
-    const logMsg = completionId
-      ? "Conversion settled — completion moved to platform_approved"
-      : "Conversion received but no matching pending completion found";
-    await writeLog(logType, logMsg, parsed, completionId, Date.now() - startMs, receivedAt);
+    if (!completion) {
+      // No completion record found — user may not have started yet (edge case).
+      // Log it so admins can investigate, but do not fail the postback response.
+      console.warn(
+        `[engine] ⚠️ approved postback but no active completion found` +
+        ` | platform=${parsed.platformId} userId=${parsed.userId} taskId=${parsed.taskId}`
+      );
+      await writeConversion(dedupKey, parsed, "", "skipped_no_completion", Date.now() - startMs, receivedAt);
+      await writeLog("skipped", "Approved postback received but no matching active completion found", parsed, "", Date.now() - startMs, receivedAt);
+      return {
+        ok: true,
+        status: "skipped",
+        completionId: null,
+        platformId: parsed.platformId,
+        userId: parsed.userId,
+        taskId: parsed.taskId,
+        payout: parsed.payout,
+        message: "No active completion found — postback logged for admin review",
+        processingMs: Date.now() - startMs,
+        parsed,
+      };
+    }
 
-    console.log(`[engine] ✅ approved — platform=${parsed.platformId} userId=${parsed.userId} taskId=${parsed.taskId} completion=${completionId || "(none)"}`);
+    if (completion.status === "user_confirmed" || completion.status === "platform_pending") {
+      // User already confirmed → both sides done → platform_approved
+      await settleFullyVerified(completion.id, parsed);
+      await writeConversion(dedupKey, parsed, completion.id, "settled", Date.now() - startMs, receivedAt);
+      await writeLog("settled", "Both postback and user confirmed — moved to platform_approved", parsed, completion.id, Date.now() - startMs, receivedAt);
+      console.log(`[engine] ✅ approved + user_confirmed → platform_approved | userId=${parsed.userId} taskId=${parsed.taskId}`);
+      return {
+        ok: true,
+        status: "settled",
+        completionId: completion.id,
+        platformId: parsed.platformId,
+        userId: parsed.userId,
+        taskId: parsed.taskId,
+        payout: parsed.payout,
+        message: "Postback approved — completion moved to platform_approved (both sides verified)",
+        processingMs: Date.now() - startMs,
+        parsed,
+      };
+    }
 
+    // started or postback_verified — store postback, wait for user confirmation
+    await settlePostbackOnly(completion.id, parsed);
+    await writeConversion(dedupKey, parsed, completion.id, "postback_stored", Date.now() - startMs, receivedAt);
+    await writeLog("postback_stored", "Postback stored — awaiting user confirmation", parsed, completion.id, Date.now() - startMs, receivedAt);
+    console.log(`[engine] 📦 approved postback stored → postback_verified | userId=${parsed.userId} taskId=${parsed.taskId}`);
     return {
       ok: true,
-      status: completionId ? "settled" : "skipped",
-      completionId: completionId || null,
+      status: "postback_stored",
+      completionId: completion.id,
       platformId: parsed.platformId,
       userId: parsed.userId,
       taskId: parsed.taskId,
       payout: parsed.payout,
-      message: logMsg,
+      message: "Postback verified and stored — awaiting user to click Completed Task",
       processingMs: Date.now() - startMs,
       parsed,
     };
   }
 
-  // rejected
-  await settleRejected(completionId, parsed);
-  await writeConversion(dedupKey, parsed, completionId, "rejected", Date.now() - startMs, receivedAt);
-  await writeLog("rejected", "Conversion rejected by platform", parsed, completionId, Date.now() - startMs, receivedAt);
+  // ── Rejected postback ─────────────────────────────────────────────────────
+  if (!completion) {
+    console.log(`[engine] ❌ rejected postback with no active completion | platform=${parsed.platformId} userId=${parsed.userId}`);
+    await writeConversion(dedupKey, parsed, "", "rejected_no_completion", Date.now() - startMs, receivedAt);
+    await writeLog("rejected", "Rejected postback — no matching active completion", parsed, "", Date.now() - startMs, receivedAt);
+    return {
+      ok: true,
+      status: "rejected",
+      completionId: null,
+      platformId: parsed.platformId,
+      userId: parsed.userId,
+      taskId: parsed.taskId,
+      payout: parsed.payout,
+      message: "Conversion rejected by platform (no active completion)",
+      processingMs: Date.now() - startMs,
+      parsed,
+    };
+  }
 
+  if (completion.status === "user_confirmed" || completion.status === "platform_pending") {
+    // User already confirmed — reverse the pendingBalance that was added on confirmation
+    await settleRejectedWithReversal(completion.id, parsed, completion.reward);
+  } else {
+    // started or postback_verified — no balance to reverse
+    await settleRejected(completion.id, parsed);
+  }
+
+  await writeConversion(dedupKey, parsed, completion.id, "rejected", Date.now() - startMs, receivedAt);
+  await writeLog("rejected", "Conversion rejected by platform", parsed, completion.id, Date.now() - startMs, receivedAt);
   console.log(`[engine] ❌ rejected — platform=${parsed.platformId} userId=${parsed.userId} taskId=${parsed.taskId}`);
 
   return {
     ok: true,
     status: "rejected",
-    completionId: completionId || null,
+    completionId: completion.id,
     platformId: parsed.platformId,
     userId: parsed.userId,
     taskId: parsed.taskId,
