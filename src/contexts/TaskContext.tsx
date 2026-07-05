@@ -288,26 +288,55 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     // Atomic check-and-create: if the document already exists (any status),
     // leave it untouched — the user may have already confirmed or the
     // postback may have already arrived. Never overwrite a further-along state.
-    await runTransaction(db, async (tx) => {
-      const snap = await tx.get(completionRef);
-      if (snap.exists()) return; // Document already exists — idempotent, do nothing
-
-      tx.set(completionRef, {
-        taskId,
-        userId: user.uid,
-        startedAt: serverTimestamp(),
-        completedAt: serverTimestamp(),
-        reward: earned,
-        adminReward,
-        status: "started" satisfies TaskCompletionStatus,
-        taskTitle: taskData.title,
-        taskDescription: taskData.description || "",
-        taskType,
-        taskPlatform: taskData.platform,
-        manualAdminRate: taskData.manualAdminRate ?? null,
-        manualUserSharePercent: taskData.manualUserSharePercent ?? null,
-      });
+    console.log("[startTask] runTransaction START", {
+      op: "runTransaction",
+      path: `taskCompletions/${docId}`,
+      targetStatus: "started",
     });
+    try {
+      await runTransaction(db, async (tx) => {
+        console.log("[startTask] tx.get", { op: "get", path: `taskCompletions/${docId}` });
+        let snap: Awaited<ReturnType<typeof tx.get>>;
+        try {
+          snap = await tx.get(completionRef);
+        } catch (e: unknown) {
+          const err = e as { code?: string; message?: string; stack?: string };
+          console.error("[startTask] tx.get FAILED", { code: err.code, message: err.message, stack: err.stack });
+          throw e;
+        }
+        if (snap.exists()) {
+          console.log("[startTask] tx.get found existing doc — no-op", { currentStatus: snap.data()?.status });
+          return;
+        }
+
+        console.log("[startTask] tx.set", {
+          op: "set",
+          path: `taskCompletions/${docId}`,
+          currentStatus: "(none — new doc)",
+          targetStatus: "started",
+        });
+        tx.set(completionRef, {
+          taskId,
+          userId: user.uid,
+          startedAt: serverTimestamp(),
+          completedAt: serverTimestamp(),
+          reward: earned,
+          adminReward,
+          status: "started" satisfies TaskCompletionStatus,
+          taskTitle: taskData.title,
+          taskDescription: taskData.description || "",
+          taskType,
+          taskPlatform: taskData.platform,
+          manualAdminRate: taskData.manualAdminRate ?? null,
+          manualUserSharePercent: taskData.manualUserSharePercent ?? null,
+        });
+      });
+      console.log("[startTask] runTransaction DONE — doc created/found at", `taskCompletions/${docId}`);
+    } catch (e: unknown) {
+      const err = e as { code?: string; message?: string; stack?: string };
+      console.error("[startTask] runTransaction FAILED", { code: err.code, message: err.message, stack: err.stack });
+      throw e;
+    }
 
     // pendingBalance is NOT incremented here — only when the user confirms.
   }
@@ -340,16 +369,34 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     const completionRef = doc(db, "taskCompletions", docId);
     const userRef = doc(db, "users", user.uid);
 
-    // ── Read from Firestore — never from React state ──────────────────────
-    // React state is stale by design (async updates). Using it as the source
-    // of truth for whether a document exists causes the duplicate-creation bug.
-    const completionSnap = await getDoc(completionRef);
+    // ── STEP 1: getDoc (deterministic path) ──────────────────────────────
+    console.log("[completeTask] getDoc", {
+      op: "get",
+      path: `taskCompletions/${docId}`,
+      note: "deterministic ID lookup — NOT React state",
+    });
+    let completionSnap: Awaited<ReturnType<typeof getDoc>>;
+    try {
+      completionSnap = await getDoc(completionRef);
+      console.log("[completeTask] getDoc result", {
+        exists: completionSnap.exists(),
+        currentStatus: completionSnap.exists() ? completionSnap.data()?.status : "(doc does not exist)",
+      });
+    } catch (e: unknown) {
+      const err = e as { code?: string; message?: string; stack?: string };
+      console.error("[completeTask] getDoc FAILED", {
+        path: `taskCompletions/${docId}`,
+        code: err.code,
+        message: err.message,
+        stack: err.stack,
+      });
+      throw e;
+    }
 
     if (completionSnap.exists()) {
       const currentStatus = completionSnap.data().status as TaskCompletionStatus;
       const earned = Number(completionSnap.data().reward) || 0;
 
-      // Terminal / already-submitted statuses
       if (currentStatus === "user_confirmed" || currentStatus === "platform_approved" || currentStatus === "approved") {
         throw new Error("You have already submitted this task");
       }
@@ -357,60 +404,121 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
         throw new Error("This task was rejected and cannot be resubmitted");
       }
 
-      // Actionable: started, postback_verified, platform_pending (legacy)
       const newStatus: TaskCompletionStatus =
         currentStatus === "postback_verified" ? "platform_approved" : "user_confirmed";
 
-      // Atomic: advance status + increment pendingBalance in one transaction.
-      // The transaction re-reads to guard against a concurrent postback that
-      // might have already advanced the status between our getDoc and now.
-      await runTransaction(db, async (tx) => {
-        const fresh = await tx.get(completionRef);
-        if (!fresh.exists()) throw new Error("Task completion not found");
-
-        const freshStatus = fresh.data().status as TaskCompletionStatus;
-        if (freshStatus === "user_confirmed" || freshStatus === "platform_approved" || freshStatus === "approved") {
-          throw new Error("You have already submitted this task");
-        }
-        if (freshStatus === "rejected") {
-          throw new Error("This task was rejected and cannot be resubmitted");
-        }
-
-        const resolvedNew: TaskCompletionStatus =
-          freshStatus === "postback_verified" ? "platform_approved" : "user_confirmed";
-
-        tx.update(completionRef, {
-          status: resolvedNew,
-          completedAt: serverTimestamp(),
-          userConfirmedAt: serverTimestamp(),
-        });
-
-        tx.update(userRef, {
-          pendingBalance: increment(earned),
-        });
+      // ── STEP 2A: runTransaction — update existing doc ─────────────────
+      console.log("[completeTask] runTransaction (existing doc path)", {
+        op: "runTransaction",
+        path: `taskCompletions/${docId}`,
+        currentStatus,
+        targetStatus: newStatus,
       });
+      try {
+        await runTransaction(db, async (tx) => {
+          console.log("[completeTask] tx.get (re-read inside tx)", {
+            op: "get",
+            path: `taskCompletions/${docId}`,
+          });
+          let fresh: Awaited<ReturnType<typeof tx.get>>;
+          try {
+            fresh = await tx.get(completionRef);
+          } catch (e: unknown) {
+            const err = e as { code?: string; message?: string; stack?: string };
+            console.error("[completeTask] tx.get FAILED inside transaction", {
+              path: `taskCompletions/${docId}`,
+              code: err.code,
+              message: err.message,
+              stack: err.stack,
+            });
+            throw e;
+          }
+          if (!fresh.exists()) throw new Error("Task completion not found");
+
+          const freshStatus = fresh.data().status as TaskCompletionStatus;
+          console.log("[completeTask] tx.get result", { freshStatus });
+
+          if (freshStatus === "user_confirmed" || freshStatus === "platform_approved" || freshStatus === "approved") {
+            throw new Error("You have already submitted this task");
+          }
+          if (freshStatus === "rejected") {
+            throw new Error("This task was rejected and cannot be resubmitted");
+          }
+
+          const resolvedNew: TaskCompletionStatus =
+            freshStatus === "postback_verified" ? "platform_approved" : "user_confirmed";
+
+          console.log("[completeTask] tx.update (completion doc)", {
+            op: "update",
+            path: `taskCompletions/${docId}`,
+            currentStatus: freshStatus,
+            targetStatus: resolvedNew,
+          });
+          tx.update(completionRef, {
+            status: resolvedNew,
+            completedAt: serverTimestamp(),
+            userConfirmedAt: serverTimestamp(),
+          });
+
+          console.log("[completeTask] tx.update (user doc)", {
+            op: "update",
+            path: `users/${user.uid}`,
+            field: "pendingBalance",
+            increment: earned,
+          });
+          tx.update(userRef, {
+            pendingBalance: increment(earned),
+          });
+        });
+        console.log("[completeTask] runTransaction DONE (existing doc path)");
+      } catch (e: unknown) {
+        const err = e as { code?: string; message?: string; stack?: string };
+        console.error("[completeTask] runTransaction FAILED (existing doc path)", {
+          code: err.code,
+          message: err.message,
+          stack: err.stack,
+        });
+        throw e;
+      }
 
       await fetchCompletions();
       await refreshProfile();
       return;
     }
 
-    // ── No document found — fallback for legacy auto-ID docs or manual tasks ──
-    //
-    // Legacy check: some older completions have Firestore auto-generated IDs.
-    // Query the collection before deciding to create a new document.
-    const legacySnap = await getDocs(
-      query(
-        collection(db, "taskCompletions"),
-        where("userId", "==", user.uid),
-        where("taskId", "==", taskId),
-        limit(1)
-      )
-    );
+    // ── STEP 2B: legacy query fallback ───────────────────────────────────
+    console.log("[completeTask] getDocs (legacy query — deterministic doc not found)", {
+      op: "getDocs",
+      collection: "taskCompletions",
+      where: { userId: user.uid, taskId },
+    });
+    let legacySnap: Awaited<ReturnType<typeof getDocs>>;
+    try {
+      legacySnap = await getDocs(
+        query(
+          collection(db, "taskCompletions"),
+          where("userId", "==", user.uid),
+          where("taskId", "==", taskId),
+          limit(1)
+        )
+      );
+      console.log("[completeTask] getDocs result", {
+        empty: legacySnap.empty,
+        count: legacySnap.docs.length,
+        firstDocId: legacySnap.empty ? "(none)" : legacySnap.docs[0].id,
+        firstDocStatus: legacySnap.empty ? "(none)" : legacySnap.docs[0].data()?.status,
+      });
+    } catch (e: unknown) {
+      const err = e as { code?: string; message?: string; stack?: string };
+      console.error("[completeTask] getDocs FAILED (legacy query)", {
+        code: err.code,
+        message: err.message,
+        stack: err.stack,
+      });
+      throw e;
+    }
 
     if (!legacySnap.empty) {
-      // Found a legacy document — update it in place and migrate it to the
-      // deterministic ID by creating the canonical document, then operating on the legacy one.
       const legacyDoc = legacySnap.docs[0];
       const currentStatus = legacyDoc.data().status as TaskCompletionStatus;
       const earned = Number(legacyDoc.data().reward) || 0;
@@ -425,31 +533,61 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
       const newStatus: TaskCompletionStatus =
         currentStatus === "postback_verified" ? "platform_approved" : "user_confirmed";
 
-      // Update the legacy document (admin-only Firestore rule means updateDoc fails here,
-      // but the Admin SDK engine will still find it; update what we can via setDoc on new ID)
-      // Strategy: create the canonical deterministic doc with the new status,
-      // and attempt to update the legacy one (will fail silently for non-admins, which is acceptable
-      // since the deterministic doc is now the authoritative record going forward).
-      await runTransaction(db, async (tx) => {
-        // Write canonical deterministic doc
-        tx.set(completionRef, {
-          ...legacyDoc.data(),
-          status: newStatus,
-          completedAt: serverTimestamp(),
-          userConfirmedAt: serverTimestamp(),
-        });
-
-        tx.update(userRef, {
-          pendingBalance: increment(earned),
-        });
+      console.log("[completeTask] runTransaction (legacy doc migration)", {
+        op: "runTransaction",
+        legacyDocPath: `taskCompletions/${legacyDoc.id}`,
+        canonicalDocPath: `taskCompletions/${docId}`,
+        currentStatus,
+        targetStatus: newStatus,
+        note: "tx.set on canonical path (create rule), tx.update on user doc",
       });
+      try {
+        await runTransaction(db, async (tx) => {
+          console.log("[completeTask] tx.set (canonical doc)", {
+            op: "set",
+            path: `taskCompletions/${docId}`,
+            currentStatus: "(none — creating canonical)",
+            targetStatus: newStatus,
+          });
+          tx.set(completionRef, {
+            ...legacyDoc.data(),
+            status: newStatus,
+            completedAt: serverTimestamp(),
+            userConfirmedAt: serverTimestamp(),
+          });
+
+          console.log("[completeTask] tx.update (user doc)", {
+            op: "update",
+            path: `users/${user.uid}`,
+            field: "pendingBalance",
+            increment: earned,
+          });
+          tx.update(userRef, {
+            pendingBalance: increment(earned),
+          });
+        });
+        console.log("[completeTask] runTransaction DONE (legacy migration)");
+      } catch (e: unknown) {
+        const err = e as { code?: string; message?: string; stack?: string };
+        console.error("[completeTask] runTransaction FAILED (legacy migration)", {
+          code: err.code,
+          message: err.message,
+          stack: err.stack,
+        });
+        throw e;
+      }
 
       await fetchCompletions();
       await refreshProfile();
       return;
     }
 
-    // ── Truly no existing record — create one (manual task or missed startTask) ──
+    // ── STEP 2C: no record at all — create fresh ─────────────────────────
+    console.log("[completeTask] no existing doc found — will create fresh completion", {
+      userId: user.uid,
+      taskId,
+    });
+
     const taskDoc = await getDoc(doc(db, "tasks", taskId));
     if (!taskDoc.exists()) throw new Error("Task not found");
     const rawTask = taskDoc.data() as Record<string, unknown>;
@@ -475,49 +613,100 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     const initialStatus: TaskCompletionStatus =
       taskType === "platform" ? "user_confirmed" : "pending";
 
-    // Atomic: create deterministic doc + increment pendingBalance
-    await runTransaction(db, async (tx) => {
-      // Re-check inside transaction — guard against a race where startTask()
-      // ran concurrently and created the document between our getDoc and now.
-      const fresh = await tx.get(completionRef);
-      if (fresh.exists()) {
-        const freshStatus = fresh.data().status as TaskCompletionStatus;
-        if (freshStatus === "user_confirmed" || freshStatus === "platform_approved" || freshStatus === "approved") {
-          throw new Error("You have already submitted this task");
+    console.log("[completeTask] runTransaction (fresh create)", {
+      op: "runTransaction",
+      path: `taskCompletions/${docId}`,
+      currentStatus: "(none)",
+      targetStatus: initialStatus,
+      taskType,
+    });
+    try {
+      await runTransaction(db, async (tx) => {
+        console.log("[completeTask] tx.get (race-check inside tx)", {
+          op: "get",
+          path: `taskCompletions/${docId}`,
+        });
+        let fresh: Awaited<ReturnType<typeof tx.get>>;
+        try {
+          fresh = await tx.get(completionRef);
+        } catch (e: unknown) {
+          const err = e as { code?: string; message?: string; stack?: string };
+          console.error("[completeTask] tx.get FAILED (fresh create race-check)", {
+            path: `taskCompletions/${docId}`,
+            code: err.code,
+            message: err.message,
+            stack: err.stack,
+          });
+          throw e;
         }
-        if (freshStatus === "rejected") {
-          throw new Error("This task was rejected and cannot be resubmitted");
+
+        if (fresh.exists()) {
+          const freshStatus = fresh.data().status as TaskCompletionStatus;
+          console.log("[completeTask] tx.get: doc appeared concurrently", { freshStatus });
+          if (freshStatus === "user_confirmed" || freshStatus === "platform_approved" || freshStatus === "approved") {
+            throw new Error("You have already submitted this task");
+          }
+          if (freshStatus === "rejected") {
+            throw new Error("This task was rejected and cannot be resubmitted");
+          }
+          const freshEarned = Number(fresh.data().reward) || earned;
+          const resolvedNew: TaskCompletionStatus =
+            freshStatus === "postback_verified" ? "platform_approved" : "user_confirmed";
+          console.log("[completeTask] tx.update (concurrent doc)", {
+            op: "update",
+            path: `taskCompletions/${docId}`,
+            currentStatus: freshStatus,
+            targetStatus: resolvedNew,
+          });
+          tx.update(completionRef, {
+            status: resolvedNew,
+            completedAt: serverTimestamp(),
+            userConfirmedAt: serverTimestamp(),
+          });
+          tx.update(userRef, { pendingBalance: increment(freshEarned) });
+          return;
         }
-        const freshEarned = Number(fresh.data().reward) || earned;
-        const resolvedNew: TaskCompletionStatus =
-          freshStatus === "postback_verified" ? "platform_approved" : "user_confirmed";
-        tx.update(completionRef, {
-          status: resolvedNew,
+
+        console.log("[completeTask] tx.set (new doc)", {
+          op: "set",
+          path: `taskCompletions/${docId}`,
+          currentStatus: "(none)",
+          targetStatus: initialStatus,
+        });
+        tx.set(completionRef, {
+          taskId,
+          userId: user.uid,
           completedAt: serverTimestamp(),
           userConfirmedAt: serverTimestamp(),
+          reward: earned,
+          adminReward,
+          status: initialStatus,
+          taskTitle: taskData.title,
+          taskDescription: taskData.description || "",
+          taskType,
+          manualAdminRate: taskData.manualAdminRate ?? null,
+          manualUserSharePercent: taskData.manualUserSharePercent ?? null,
+          taskPlatform: taskData.platform,
         });
-        tx.update(userRef, { pendingBalance: increment(freshEarned) });
-        return;
-      }
 
-      tx.set(completionRef, {
-        taskId,
-        userId: user.uid,
-        completedAt: serverTimestamp(),
-        userConfirmedAt: serverTimestamp(),
-        reward: earned,
-        adminReward,
-        status: initialStatus,
-        taskTitle: taskData.title,
-        taskDescription: taskData.description || "",
-        taskType,
-        manualAdminRate: taskData.manualAdminRate ?? null,
-        manualUserSharePercent: taskData.manualUserSharePercent ?? null,
-        taskPlatform: taskData.platform,
+        console.log("[completeTask] tx.update (user doc)", {
+          op: "update",
+          path: `users/${user.uid}`,
+          field: "pendingBalance",
+          increment: earned,
+        });
+        tx.update(userRef, { pendingBalance: increment(earned) });
       });
-
-      tx.update(userRef, { pendingBalance: increment(earned) });
-    });
+      console.log("[completeTask] runTransaction DONE (fresh create)");
+    } catch (e: unknown) {
+      const err = e as { code?: string; message?: string; stack?: string };
+      console.error("[completeTask] runTransaction FAILED (fresh create)", {
+        code: err.code,
+        message: err.message,
+        stack: err.stack,
+      });
+      throw e;
+    }
 
     await fetchCompletions();
     await refreshProfile();
