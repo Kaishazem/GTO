@@ -1,0 +1,95 @@
+You are a senior full-stack engineer.
+
+TASK: Fix critical Firestore inconsistency bug in task completion system.
+
+════════════════════════════════════
+PROBLEM SUMMARY
+════════════════════════════════════
+
+We currently have duplicate taskCompletions and broken status updates.
+
+Root cause:
+1. completeTask() uses React state (completions.find) instead of Firestore query
+2. Firestore rules block updateDoc() for normal users
+3. addDoc() is called in fallback path causing duplicate documents
+4. Result: multiple documents per (userId + taskId)
+
+════════════════════════════════════
+WHAT YOU MUST FIX
+════════════════════════════════════
+
+1. FIX completeTask() in src/contexts/TaskContext.tsx
+
+Replace local-state lookup:
+❌ completions.find(...)
+
+WITH Firestore query:
+✔ query(taskCompletions where userId == currentUser AND taskId == taskId)
+
+Ensure it always finds the canonical document.
+
+---
+
+2. PREVENT DUPLICATE DOCUMENT CREATION
+
+DO NOT allow fallback addDoc() to create a second document.
+
+Instead:
+- Always operate on a single canonical document per (userId + taskId)
+- If document does not exist → create it ONCE and reuse same ID
+
+---
+
+3. ENSURE SINGLE SOURCE OF TRUTH
+
+Refactor so that:
+- React state is ONLY for UI
+- Firestore is ALWAYS authoritative
+
+---
+
+4. FIX FIRESTORE UPDATE FLOW
+
+If Firestore rules prevent updateDoc() for users:
+
+You must:
+- Move status transitions to a safe allowed path OR
+- Use server-side function / API endpoint OR
+- Adjust rules safely (ONLY if necessary and explained)
+
+Do NOT leave updateDoc() silently failing.
+
+---
+
+5. ENFORCE UNIQUE TASK COMPLETION PER USER
+
+Guarantee:
+ONLY ONE document per (userId + taskId)
+
+You may use:
+- deterministic document ID
+OR
+- Firestore query + update pattern
+OR
+- transaction
+
+---
+
+════════════════════════════════════
+EXPECTED RESULT
+════════════════════════════════════
+
+After fix:
+
+✔ No duplicate taskCompletions
+✔ started → user_confirmed works correctly
+✔ postback updates same document
+✔ Firestore reflects single lifecycle per task
+
+════════════════════════════════════
+IMPORTANT
+════════════════════════════════════
+
+- Do NOT change CPA or OGAds logic
+- Do NOT change UI unless necessary
+- Focus ONLY on data integrity + completion system

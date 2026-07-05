@@ -183,9 +183,29 @@ interface CompletionInfo {
 }
 
 /**
+ * Deterministic document ID — must match the client-side completionDocId() helper.
+ * Format: `${userId}_${taskId}`
+ */
+function completionDocId(userId: string, taskId: string): string {
+  return `${userId}_${taskId}`;
+}
+
+const ACTIVE_STATUSES = [
+  "started",          // user opened the offer URL
+  "user_confirmed",   // user clicked "Completed Task", awaiting postback
+  "postback_verified",// postback arrived, awaiting user confirmation
+  "platform_pending", // legacy: pre-redesign combined start+confirm record
+];
+
+/**
  * Find any TaskCompletion that is still awaiting resolution for the given
- * user+task pair.  Includes all intermediate (non-terminal) statuses so that
- * postbacks arriving in either order are handled correctly.
+ * user+task pair.
+ *
+ * Strategy:
+ *   1. Try the deterministic ID (userId_taskId) first — O(1) getDoc.
+ *      New completions always use this ID format.
+ *   2. Fall back to a collection query for legacy documents that were created
+ *      with Firestore auto-generated IDs before the deterministic ID migration.
  */
 async function findActiveCompletion(
   userId: string,
@@ -193,20 +213,33 @@ async function findActiveCompletion(
 ): Promise<CompletionInfo | null> {
   if (!db) return null;
   try {
-    const snap = await db
+    // ── 1. Try deterministic ID (fast path) ──────────────────────────────
+    const docId = completionDocId(userId, taskId);
+    const snap = await db.collection("taskCompletions").doc(docId).get();
+    if (snap.exists) {
+      const status = snap.data()?.status as string;
+      if (ACTIVE_STATUSES.includes(status)) {
+        return {
+          id: snap.id,
+          status,
+          reward: Number(snap.data()?.reward || 0),
+        };
+      }
+      // Document exists but is in a terminal status — no action needed
+      return null;
+    }
+
+    // ── 2. Legacy query fallback for auto-ID documents ───────────────────
+    const legacySnap = await db
       .collection("taskCompletions")
       .where("taskId", "==", taskId)
       .where("userId", "==", userId)
-      .where("status", "in", [
-        "started",          // new: user opened the offer URL
-        "user_confirmed",   // new: user clicked "Completed Task", awaiting postback
-        "postback_verified",// new: postback arrived, awaiting user confirmation
-        "platform_pending", // legacy: combined start+confirm from pre-redesign records
-      ])
+      .where("status", "in", ACTIVE_STATUSES)
       .limit(1)
       .get();
-    if (snap.empty) return null;
-    const d = snap.docs[0];
+
+    if (legacySnap.empty) return null;
+    const d = legacySnap.docs[0];
     return {
       id: d.id,
       status: d.data().status as string,

@@ -39,9 +39,43 @@ service cloud.firestore {
     // ── taskCompletions/{completionId} ────────────────────────────────────
     // Authenticated users can create completions for themselves.
     // Users can read their own; admins can read/write all.
+    //
+    // Deterministic document IDs are used: ${userId}_${taskId}
+    // This guarantees at most one completion per (user, task) pair.
+    //
+    // Users may update their OWN completion to advance the lifecycle:
+    //   started / platform_pending → user_confirmed
+    //   postback_verified          → platform_approved
+    // Any other transition or field tampering is denied.
+    //
+    // resource == null guard on read: when the document does not exist,
+    // `resource` is null and `resource.data` throws in the rule evaluator,
+    // returning permission-denied instead of not-found. The null guard
+    // lets getDoc() inside transactions return a non-existent snapshot
+    // safely so the caller can decide whether to create the document.
     match /taskCompletions/{completionId} {
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow read:   if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+
+      allow read: if isSignedIn() && (
+        resource == null ||
+        resource.data.userId == request.auth.uid ||
+        isAdmin()
+      );
+
+      // Users advance their own lifecycle (started/platform_pending → user_confirmed,
+      // or postback_verified → platform_approved). Immutable fields enforced.
+      allow update: if isSignedIn()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.taskId == resource.data.taskId
+        && request.resource.data.reward == resource.data.reward
+        && (
+          (resource.data.status in ['started', 'platform_pending']
+            && request.resource.data.status == 'user_confirmed')
+          || (resource.data.status == 'postback_verified'
+            && request.resource.data.status == 'platform_approved')
+        );
+
       allow update, delete: if isAdmin();
     }
 
