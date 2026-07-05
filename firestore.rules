@@ -37,46 +37,65 @@ service cloud.firestore {
     }
 
     // ── taskCompletions/{completionId} ────────────────────────────────────
-    // Authenticated users can create completions for themselves.
-    // Users can read their own; admins can read/write all.
-    //
-    // Deterministic document IDs are used: ${userId}_${taskId}
-    // This guarantees at most one completion per (user, task) pair.
-    //
-    // Users may update their OWN completion to advance the lifecycle:
-    //   started / platform_pending → user_confirmed
-    //   postback_verified          → platform_approved
-    // Any other transition or field tampering is denied.
-    //
-    // resource == null guard on read: when the document does not exist,
-    // `resource` is null and `resource.data` throws in the rule evaluator,
-    // returning permission-denied instead of not-found. The null guard
-    // lets getDoc() inside transactions return a non-existent snapshot
-    // safely so the caller can decide whether to create the document.
     match /taskCompletions/{completionId} {
+
+      // ── CREATE ─────────────────────────────────────────────────────────
+      // Users may create completions only for themselves.
+      // Admins may create any completion (e.g. manual admin-side records).
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow create: if isAdmin();
 
-      allow read: if isSignedIn() && (
-        resource == null ||
-        resource.data.userId == request.auth.uid ||
-        isAdmin()
-      );
+      // ── READ ───────────────────────────────────────────────────────────
+      // Users may read only their own completion documents.
+      //
+      // resource == null guard: when the target document does not exist,
+      // `resource` is null in the rule evaluator. Evaluating `resource.data.*`
+      // on null throws internally and Firestore returns permission-denied
+      // instead of a not-found (empty) snapshot. This guard is required so
+      // that runTransaction() can safely call tx.get() on a document that
+      // may not yet exist — the transaction reads the current state before
+      // deciding whether to create or update.
+      allow read: if isSignedIn()
+        && (resource == null || resource.data.userId == request.auth.uid);
+      allow read: if isAdmin();
 
-      // Users advance their own lifecycle (started/platform_pending → user_confirmed,
-      // or postback_verified → platform_approved). Immutable fields enforced.
+      // ── UPDATE (users) ─────────────────────────────────────────────────
+      // Users may advance their OWN completion through exactly two lifecycle
+      // transitions. All other fields are immutable.
+      //
+      // Allowed transitions:
+      //   started          → user_confirmed    (user clicked "Completed Task")
+      //   platform_pending → user_confirmed    (legacy pre-redesign record)
+      //   postback_verified→ platform_approved (postback arrived first, user confirms)
+      //
+      // Immutable fields (users cannot alter payout, ownership, or task link):
+      //   userId, taskId, reward, adminReward
+      //
+      // Users may NOT transition directly to approved, rejected, platform_pending,
+      // postback_verified, or started. Only the two transitions above are valid.
       allow update: if isSignedIn()
+        // Must own the document
         && resource.data.userId == request.auth.uid
+        // Cannot transfer ownership
         && request.resource.data.userId == resource.data.userId
+        // Cannot change the task this completion belongs to
         && request.resource.data.taskId == resource.data.taskId
+        // Cannot alter payout values
         && request.resource.data.reward == resource.data.reward
+        && request.resource.data.adminReward == resource.data.adminReward
+        // Only these two status transitions are permitted
         && (
-          (resource.data.status in ['started', 'platform_pending']
-            && request.resource.data.status == 'user_confirmed')
+             (resource.data.status in ['started', 'platform_pending']
+               && request.resource.data.status == 'user_confirmed')
           || (resource.data.status == 'postback_verified'
-            && request.resource.data.status == 'platform_approved')
+               && request.resource.data.status == 'platform_approved')
         );
 
+      // ── UPDATE / DELETE (admins) ────────────────────────────────────────
+      // Admins have unrestricted update and delete access for settlement,
+      // rejection, and manual correction workflows.
       allow update, delete: if isAdmin();
+
     }
 
     // ── payouts/{payoutId} ───────────────────────────────────────────────
