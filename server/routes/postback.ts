@@ -15,6 +15,25 @@ const router = Router();
 // ── Shared handler (GET and POST both use this) ──────────────────────────────
 
 async function handle(req: Request, res: Response): Promise<void> {
+  // ── TEMPORARY DIAGNOSTIC LOGGING — remove after postback is confirmed working ──
+  console.log("\n[POSTBACK:RAW] ══════════════════════════════════════════════════");
+  console.log("[POSTBACK:RAW] timestamp  :", new Date().toISOString());
+  console.log("[POSTBACK:RAW] method     :", req.method);
+  console.log("[POSTBACK:RAW] full URL   :", `${req.protocol}://${req.get("host")}${req.originalUrl}`);
+  console.log("[POSTBACK:RAW] query      :", JSON.stringify(req.query));
+  console.log("[POSTBACK:RAW] body       :", typeof req.body === "object" ? JSON.stringify(req.body) : String(req.body ?? "(empty)"));
+  console.log("[POSTBACK:RAW] headers    :", JSON.stringify({
+    "user-agent"   : req.get("user-agent"),
+    "content-type" : req.get("content-type"),
+    "x-forwarded-for": req.get("x-forwarded-for"),
+    "x-real-ip"    : req.get("x-real-ip"),
+    "referer"      : req.get("referer"),
+    "accept"       : req.get("accept"),
+    "host"         : req.get("host"),
+  }));
+  console.log("[POSTBACK:RAW] ══════════════════════════════════════════════════\n");
+  // ── END TEMPORARY DIAGNOSTIC LOGGING ─────────────────────────────────────
+
   // Merge query string + body into a single string-value map.
   // Body values win over query values on name collisions.
   const rawParams: Record<string, string> = {};
