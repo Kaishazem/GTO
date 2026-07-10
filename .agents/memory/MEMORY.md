@@ -1,7 +1,8 @@
+- [OGAds API v2 endpoint](ogads-api-endpoint.md) — base URL is the endpoint; no sub-path (/offers, /feed, etc.) exists; all return 404.
 - [Task interface platform fields](task-platform-fields.md) — Task interface has optional category/countries/devices/requirements/image/conversionType/externalId from import engine; mapTask reads them.
 - [Completion status flow](completion-status-flow.md) — Async lifecycle: started→user_confirmed OR postback_verified→platform_approved→approved/rejected; pendingBalance only incremented on user confirmation.
 - [Notification system architecture](notification-architecture.md) — deduped doc IDs, onSnapshot change-detection pattern, no polling, 5 separate listeners.
 - [Firestore rules new collections](firestore-rules-additions.md) — notifications and systemMessages rules added to firestore.rules; deploy rules after any new collection.
 - [Firestore null-resource rule bug](firestore-null-resource-rule.md) — getDoc on non-existent doc fails for regular users when rule uses resource.data.X; fix: resource==null guard + fallback setDoc.
 - [Firestore composite index pitfall](firestore-composite-indexes.md) — compound queries (2+ where/orderBy) silently crash onSnapshot without error handler; simplify to single-field queries + client-side filter.
-- [taskCompletions deterministic ID](task-completions-deterministic-id.md) — doc ID is userId_taskId; enforces one doc per (user,task); setDoc replaces addDoc; getDoc replaces completions.find(); engine uses getDoc fast-path then falls back to query for legacy auto-ID docs.
+- [taskCompletions deterministic ID](task-completions-deterministic-id.md) — doc ID is userId_taskId; enforces one doc per (user,task); setDoc replaces addDoc; getDoc replaces completions.find(); engine uses getDoc fast-path then falls back.

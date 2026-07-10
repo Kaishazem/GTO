@@ -632,6 +632,15 @@ export default function AdminPage() {
             resolvedResponsePath = "offers";
           }
         }
+        // ── OGAds fix: API v2 base URL IS the endpoint — no sub-path exists.
+        // /offers, /feed, and all other sub-paths return 404.
+        // Also enforce Bearer auth — OGAds requires Authorization: Bearer <token>,
+        // not a query-param api_key. Correct both stale values from Firestore.
+        const _isOGAds = sv("name").toLowerCase() === "ogads" || resolvedApiBase.includes("saveapp.store");
+        if (_isOGAds) {
+          resolvedEndpoint = "";
+          resolvedAuthType = "bearer";
+        }
         return {
           id: d.id,
           name: sv("name"),
@@ -871,6 +880,15 @@ export default function AdminPage() {
             resolvedAuthType = "apiKeyHeader";
             resolvedResponsePath = "offers";
           }
+        }
+        // ── OGAds fix: API v2 base URL IS the endpoint — no sub-path exists.
+        // /offers, /feed, and all other sub-paths return 404.
+        // Correct any stale stored endpoint (e.g. "/offers") back to "".
+        // Also enforce Bearer auth — OGAds requires Authorization: Bearer <token>.
+        const _isOGAds2 = sv("name").toLowerCase() === "ogads" || resolvedApiBase.includes("saveapp.store");
+        if (_isOGAds2) {
+          resolvedEndpoint = "";
+          resolvedAuthType = "bearer";
         }
         // ─────────────────────────────────────────────────────────────────────
 
@@ -1580,14 +1598,21 @@ export default function AdminPage() {
           .map((d) => {
             const data = d.data();
             const sv = (k: string) => String(data[k] || "");
+            const resolvedApiBase = sv("apiBase");
+            const resolvedName    = sv("name").toLowerCase();
+            // ── OGAds fix: base URL is the endpoint — no sub-path.
+            // Also enforce Bearer auth (OGAds requires Authorization: Bearer <token>).
+            const isOGAds = resolvedName === "ogads" || resolvedApiBase.includes("saveapp.store");
+            const resolvedEndpoint   = isOGAds ? "" : sv("endpoint");
+            const resolvedAutoAuth   = isOGAds ? "bearer" : (sv("authenticationType") || "queryParam");
             return {
               id: d.id,
               name: sv("name"),
               displayName: sv("displayName") || sv("name"),
               enabled: data.enabled !== false,
-              apiBase: sv("apiBase"),
-              endpoint: sv("endpoint"),
-              authenticationType: (sv("authenticationType") || "queryParam") as ManagedPlatform["authenticationType"],
+              apiBase: resolvedApiBase,
+              endpoint: resolvedEndpoint,
+              authenticationType: resolvedAutoAuth as ManagedPlatform["authenticationType"],
               apiKey: sv("apiKey") || sv("adgemApiKey") || sv("lootablyApiKey"),
               apiKeyParam: sv("apiKeyParam") || "api_key",
               apiKeyHeaderName: sv("apiKeyHeaderName") || "X-API-Key",

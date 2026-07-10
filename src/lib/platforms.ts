@@ -162,6 +162,10 @@ export const PLATFORM_REGISTRY: PlatformConfig[] = [
       "platform=ogads is a fixed literal in this URL — do not replace it with a macro.",
     apiDefaults: {
       apiBase: "https://saveapp.store/api/v2",
+      // OGAds API v2: the base URL IS the endpoint — no sub-path is appended.
+      // /offers, /feed, and all other sub-paths return 404.
+      // Leave endpoint empty so the request goes directly to the base URL.
+      endpoint: "",
       authType: "bearer",
       responsePath: "offers",
       fieldMapping:
