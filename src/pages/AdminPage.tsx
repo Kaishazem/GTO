@@ -1337,7 +1337,10 @@ export default function AdminPage() {
         await addDoc(collection(db, "tasks"), {
           title, description, url,
           platform: platformName,
-          platformId,
+          // Store the registry id (e.g. "ogads", "cpagrip") so buildTrackingUrl can
+          // look up the correct tracking strategy.  The Firestore document id is
+          // preserved separately in importedFrom for any back-reference.
+          platformId: platform?.name?.toLowerCase() || platformId,
           payout,
           reward: payout,
           type: payout >= 0.05 ? "premium" : "simple",
@@ -1703,10 +1706,16 @@ export default function AdminPage() {
         const BATCH = 20;
         for (let i = 0; i < toImport.length; i += BATCH) {
           const chunk = toImport.slice(i, i + BATCH);
+          // Registry id for this platform (e.g. "ogads", "cpagrip") — used by
+          // buildTrackingUrl to pick the correct tracking strategy.
+          const registryId = plat.name?.toLowerCase() || plat.id;
           await Promise.all(chunk.map((item) =>
             addDoc(collection(db, "tasks"), {
-              platform: item.platform,
-              platformId: item.platformId,
+              platform: plat.displayName || plat.name || plat.id,
+              // platformId must be the registry id so getPlatformConfig() resolves
+              // the correct tracking strategy (aff_sub/aff_sub2 for OGAds, etc.).
+              // The Firestore platform document id is kept in importedFrom.
+              platformId: registryId,
               title: item.title,
               description: item.description,
               reward: item.payout,
@@ -1714,14 +1723,14 @@ export default function AdminPage() {
               url: item.url,
               externalId: item.externalId,
               offerId: item.externalId,
-              network: item.platformId,
+              network: registryId,
               status: "published",
               taskType: "platform",
               type: item.payout >= 0.05 ? "premium" : "simple",
               active: true,
               networkStatus: "pending",
               manualAdminRate: 0.35,
-              importedFrom: item.platformId,
+              importedFrom: plat.id,
               createdAt: serverTimestamp(),
             })
           ));
