@@ -640,6 +640,14 @@ export default function AdminPage() {
         if (_isOGAds) {
           resolvedEndpoint = "";
           resolvedAuthType = "bearer";
+          // Replace any un-substituted template placeholders with safe defaults.
+          // OGAds rejects requests where ip is literally "{ip}".
+          const qp = { ...resolvedQueryParams };
+          if (!qp.ip || qp.ip.startsWith("{"))
+            qp.ip = "8.8.8.8";
+          if (!qp.user_agent || qp.user_agent.startsWith("{"))
+            qp.user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+          resolvedQueryParams = qp;
         }
         return {
           id: d.id,
@@ -889,6 +897,13 @@ export default function AdminPage() {
         if (_isOGAds2) {
           resolvedEndpoint = "";
           resolvedAuthType = "bearer";
+          // Replace any un-substituted template placeholders with safe defaults.
+          const qp2 = { ...resolvedQueryParams };
+          if (!qp2.ip || qp2.ip.startsWith("{"))
+            qp2.ip = "8.8.8.8";
+          if (!qp2.user_agent || qp2.user_agent.startsWith("{"))
+            qp2.user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+          resolvedQueryParams = qp2;
         }
         // ─────────────────────────────────────────────────────────────────────
 
@@ -1605,6 +1620,16 @@ export default function AdminPage() {
             const isOGAds = resolvedName === "ogads" || resolvedApiBase.includes("saveapp.store");
             const resolvedEndpoint   = isOGAds ? "" : sv("endpoint");
             const resolvedAutoAuth   = isOGAds ? "bearer" : (sv("authenticationType") || "queryParam");
+            // Replace any un-substituted OGAds template placeholders with safe defaults.
+            const rawQp3 = (data.queryParameters as Record<string, string>) || {};
+            const resolvedQp3 = isOGAds ? (() => {
+              const qp = { ...rawQp3 };
+              if (!qp.ip || qp.ip.startsWith("{"))
+                qp.ip = "8.8.8.8";
+              if (!qp.user_agent || qp.user_agent.startsWith("{"))
+                qp.user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+              return qp;
+            })() : rawQp3;
             return {
               id: d.id,
               name: sv("name"),
@@ -1619,7 +1644,7 @@ export default function AdminPage() {
               basicAuthUser: sv("basicAuthUser"),
               requestMethod: (sv("requestMethod") || "GET") as ManagedPlatform["requestMethod"],
               headers: (data.headers as Record<string, string>) || {},
-              queryParameters: (data.queryParameters as Record<string, string>) || {},
+              queryParameters: resolvedQp3,
               responsePath: sv("responsePath") || "offers",
               offerMapping: (data.offerMapping as Record<string, string>) || {},
               postbackUrl: sv("postbackUrl"),
