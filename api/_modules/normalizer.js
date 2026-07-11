@@ -29,19 +29,23 @@ const DEFAULT_MAPPING = {
 
 // Fallback chains: if the mapped path is missing, try these alternatives
 const FALLBACK_CHAINS = {
-  id:             ['id', 'offer_id', 'offerId', 'campaign_id'],
+  // 'offerid' (one word, no underscore) is OGAds' field name — it must come
+  // before 'offerId' (camelCase) so the lowercase comparison hits first.
+  id:             ['id', 'offer_id', 'offerid', 'offerId', 'campaign_id'],
   title:          ['name', 'title', 'offer_name', 'campaign_name', 'label'],
   description:    ['description', 'desc', 'requirements', 'details', 'short_description'],
   payout:         ['payout', 'reward', 'amount', 'cpa', 'commission', 'price'],
   url:            ['url', 'link', 'offer_url', 'offerlink', 'tracking_link', 'click_url'],
-  image:          ['image', 'icon', 'thumbnail', 'img', 'offerphoto', 'logo', 'creative_url'],
+  // 'picture' is OGAds' image field name.
+  image:          ['image', 'icon', 'thumbnail', 'img', 'picture', 'offerphoto', 'logo', 'creative_url'],
   category:       ['category', 'vertical', 'niche', 'type'],
   countries:      ['countries', 'country', 'geo', 'allowed_countries', 'geos'],
   devices:        ['devices', 'device', 'platform', 'os', 'operating_system'],
   requirements:   ['requirements', 'instructions', 'steps', 'conversion_instructions'],
   trackingUrl:    ['tracking_url', 'trackingUrl', 'postback_url'],
   previewUrl:     ['preview_url', 'previewUrl', 'preview', 'sample_url'],
-  conversionType: ['conversion_type', 'conversionType', 'event_type', 'goal_type'],
+  // 'ctype' is OGAds' conversion type field name.
+  conversionType: ['conversion_type', 'conversionType', 'ctype', 'event_type', 'goal_type'],
 };
 
 /**
