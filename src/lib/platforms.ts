@@ -155,7 +155,7 @@ export const PLATFORM_REGISTRY: PlatformConfig[] = [
       taskParam: "aff_sub2",
     },
     postbackTemplate:
-      "?aff_sub={aff_sub}&aff_sub2={aff_sub2}&offer_id={offer_id}&payout={payout}&password={password}&platform=ogads",
+      "?aff_sub={aff_sub}&aff_sub2={aff_sub2}&offer_id={offer_id}&payout={payout}&platform=ogads",
     accentColor: "blue",
     postbackSetupHint: "OGAds → Tools → Postback URL",
     postbackNote:
