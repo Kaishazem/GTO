@@ -436,8 +436,12 @@ export async function processPostback(
   }
 
   // ── Secret validation (only when a secret is configured) ────────────────
+  // OGAds does not support a custom password macro in its postback URL, so
+  // the password check is skipped entirely for OGAds postbacks.  All other
+  // networks still require a matching password when one is configured.
   const expectedSecret = await getPostbackSecret();
-  if (expectedSecret) {
+  const skipSecretCheck = parsed.platformId === "ogads";
+  if (expectedSecret && !skipSecretCheck) {
     const incoming = secretFromParams(rawParams);
     if (incoming !== expectedSecret) {
       console.warn(`[engine] ❌ Invalid secret — platform=${parsed.platformId}`);
