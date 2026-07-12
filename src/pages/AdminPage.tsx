@@ -2113,7 +2113,7 @@ export default function AdminPage() {
         await Promise.all(chunk.map((item) =>
           addDoc(collection(db, "tasks"), {
             platform: item.platform,
-            platformId: item.platformId,
+            platformId: platform.name?.toLowerCase() || platform.id,
             title: item.title,
             description: item.description,
             reward: item.payout,
