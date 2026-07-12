@@ -3,9 +3,104 @@
 // Accepts GET and POST from any CPA/offerwall network.
 // Uses the Universal Parser to normalise params before any business logic.
 // Returns HTTP 200 on ALL business-logic decisions — ad networks retry on non-200.
+//
+// ── ROOT-CAUSE FIX (see .agents/memory/postback-admin-sdk-required.md) ────────
+// This file previously talked to Firestore over the public REST API using only
+// the client API key (`?key=...`). That is an UNAUTHENTICATED request as far as
+// Firestore Security Rules are concerned (request.auth == null), so every write
+// to `taskCompletions` / `postbackConversions` / `postbackLogs` was silently
+// rejected with PERMISSION_DENIED by firestore.rules (isAdmin()/isSignedIn()
+// both require request.auth). The handler swallowed those errors in try/catch
+// and still returned HTTP 200 "settled" to the ad network — so conversions
+// looked successful in the logs but never actually reached Firestore.
+//
+// Fix: use the Firebase Admin SDK (service-account credentials), exactly like
+// server/postback/engine.ts (dev) and api/broadcast.js already do. The Admin
+// SDK bypasses Security Rules entirely, so writes actually persist.
+//
+// This also folds in the status-matching bug: the old query only looked for
+// taskCompletions with status IN ['pending','platform_pending'], but the
+// async start/confirm lifecycle actually produces 'started' and
+// 'user_confirmed' — those were never matched, so completionId was always
+// null for brand-new (non-legacy) completions.
 
 import crypto from 'crypto';
+import admin from 'firebase-admin';
 import { parsePostback } from './_modules/postbackParser.js';
+
+// ── Credential resolution (supports both naming conventions) ──────────────────
+const projectId = process.env.FIREBASE_PROJECT_ID
+  || process.env.VITE_FIREBASE_PROJECT_ID;
+
+const clientEmail = process.env.FIREBASE_ADMIN_CLIENT_EMAIL
+  || process.env.FIREBASE_CLIENT_EMAIL;
+
+const rawKey = process.env.FIREBASE_ADMIN_PRIVATE_KEY
+  || process.env.FIREBASE_PRIVATE_KEY;
+
+function normaliseKey(raw) {
+  if (!raw) return null;
+  let key = raw
+    .replace(/^["']|["']$/g, '')
+    .replace(/\\\\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/\r\n/g, '\n')
+    .trim();
+  if (!key.includes('\n')) {
+    const m = key.match(/-----BEGIN ([^-]+)-----\s*([\s\S]+?)\s*-----END \1-----/);
+    if (m) {
+      const body = m[2].replace(/\s+/g, '');
+      const lines = body.match(/.{1,64}/g) ?? [];
+      key = `-----BEGIN ${m[1]}-----\n${lines.join('\n')}\n-----END ${m[1]}-----\n`;
+    } else {
+      console.error('[postback] ❌ FIREBASE_ADMIN_PRIVATE_KEY / FIREBASE_PRIVATE_KEY is not valid PEM.');
+      return null;
+    }
+  }
+  return key;
+}
+
+const privateKey = normaliseKey(rawKey);
+
+let db = null;
+let initError = null;
+
+console.log('[postback] env check —'
+  + ` projectId=${projectId ? '✅' : '❌ MISSING'}`
+  + ` clientEmail=${clientEmail ? '✅' : '❌ MISSING'}`
+  + ` privateKey=${rawKey ? '✅' : '❌ MISSING'}`);
+
+if (!projectId || !clientEmail || !privateKey) {
+  const missing = [
+    !projectId && 'FIREBASE_PROJECT_ID (or VITE_FIREBASE_PROJECT_ID)',
+    !clientEmail && 'FIREBASE_ADMIN_CLIENT_EMAIL (or FIREBASE_CLIENT_EMAIL)',
+    !privateKey && 'FIREBASE_ADMIN_PRIVATE_KEY (or FIREBASE_PRIVATE_KEY)',
+  ].filter(Boolean);
+  initError = `Missing env vars: ${missing.join(', ')}`;
+  console.error('[postback] ❌', initError);
+} else if (!admin.apps.length) {
+  try {
+    admin.initializeApp({
+      credential: admin.credential.cert({ projectId, clientEmail, privateKey }),
+      projectId,
+    });
+    db = admin.firestore();
+    console.log('[postback] ✅ Firebase Admin initialised — project:', projectId);
+  } catch (err) {
+    initError = err?.message || String(err);
+    console.error('[postback] ❌ Firebase Admin init failed:', initError);
+  }
+} else {
+  db = admin.firestore();
+}
+
+// Statuses that represent a taskCompletion still awaiting resolution.
+// Must mirror server/postback/engine.ts ACTIVE_STATUSES exactly.
+const ACTIVE_STATUSES = ['started', 'user_confirmed', 'postback_verified', 'platform_pending'];
+
+function completionDocId(userId, taskId) {
+  return `${userId}_${taskId}`;
+}
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
@@ -18,7 +113,7 @@ export default async function handler(req, res) {
   }
 
   const receivedAt = new Date().toISOString();
-  const startTime  = Date.now();
+  const startTime = Date.now();
 
   // ── Merge GET query + POST body ───────────────────────────────────────────
   const rawParams = {};
@@ -33,250 +128,297 @@ export default async function handler(req, res) {
   const parsed = parsePostback(rawParams);
   const { platformId, displayName, userId, taskId, convId, payout, status } = parsed;
 
-  console.log(`[postback] ▶ ${req.method} network=${platformId} user=${userId} task=${taskId} conv=${convId} status=${status} payout=${payout}`);
-  console.log(`[postback]   raw params: ${JSON.stringify(rawParams).slice(0, 500)}`);
+  const fullUrl = `${req.headers['x-forwarded-proto'] || 'https'}://${req.headers.host || ''}${req.url || ''}`;
 
-  // ── Firebase config ───────────────────────────────────────────────────────
-  const firebaseProjectId =
-    process.env.VITE_FIREBASE_PROJECT_ID ||
-    process.env.FIREBASE_PROJECT_ID ||
-    'green-task-orbit';
-  const firebaseApiKey =
-    process.env.VITE_FIREBASE_API_KEY ||
-    process.env.FIREBASE_API_KEY;
+  // ── TEMPORARY DETAILED LOGGING (server-side only) ──────────────────────────
+  console.log('\n[postback] ══════════════════════════════════════════════════');
+  console.log('[postback] timestamp        :', receivedAt);
+  console.log('[postback] method           :', req.method);
+  console.log('[postback] full URL         :', fullUrl);
+  console.log('[postback] query params     :', JSON.stringify(rawParams));
+  console.log('[postback] aff_sub          :', rawParams.aff_sub ?? '(absent)');
+  console.log('[postback] aff_sub2         :', rawParams.aff_sub2 ?? '(absent)');
+  console.log('[postback] offer_id         :', rawParams.offer_id ?? '(absent)');
+  console.log('[postback] payout (parsed)  :', payout);
+  console.log('[postback] platform         :', platformId, `(${displayName})`);
+  console.log('[postback] userId (parsed)  :', userId || '(empty)');
+  console.log('[postback] taskId (parsed)  :', taskId || '(empty)');
+  console.log('[postback] convId           :', convId || '(empty)');
+  console.log('[postback] status (parsed)  :', status);
+  console.log('[postback] ══════════════════════════════════════════════════\n');
 
-  if (!firebaseApiKey) {
-    console.error('[postback] FATAL: Missing VITE_FIREBASE_API_KEY');
-    return res.status(200).json({ received: true, status: 'db_unavailable', message: 'Server configuration error' });
+  if (!db) {
+    console.error('[postback] ❌ REJECTED — Firebase Admin unavailable:', initError || 'unknown init error');
+    return res.status(200).json({ received: true, status: 'db_unavailable', message: initError || 'Server configuration error' });
   }
 
-  const fsBase = `https://firestore.googleapis.com/v1/projects/${firebaseProjectId}/databases/(default)/documents`;
-  const key    = `?key=${firebaseApiKey}`;
-
   // ── Secret validation ─────────────────────────────────────────────────────
+  // OGAds does not support a custom password macro — skip the check for it.
   const secretIncoming = (rawParams.password || rawParams.secret || rawParams.sig || rawParams.pass || '').trim();
-  const expectedSecret = await loadPostbackSecret(fsBase, key);
-  if (expectedSecret && secretIncoming !== expectedSecret) {
-    console.warn(`[postback] ❌ Invalid secret — platform=${platformId}`);
-    await writeLog(fsBase, key, 'invalid_secret', 'Invalid postback secret', parsed, '', Date.now() - startTime, receivedAt);
+  const expectedSecret = await loadPostbackSecret(db);
+  const skipSecretCheck = platformId === 'ogads';
+  if (expectedSecret && !skipSecretCheck && secretIncoming !== expectedSecret) {
+    console.warn(`[postback] ❌ REJECTED — invalid secret — platform=${platformId}`);
+    await writeLog(db, 'invalid_secret', 'Invalid postback secret', parsed, '', Date.now() - startTime, receivedAt);
     return res.status(200).json({ received: true, status: 'invalid_secret' });
   }
 
   // ── Deduplication ─────────────────────────────────────────────────────────
-  const dedupKey   = convId ? `${platformId}_${convId}` : `${platformId}_${userId}_${taskId}`;
+  const dedupKey = convId ? `${platformId}_${convId}` : `${platformId}_${userId}_${taskId}`;
   const dedupDocId = Buffer.from(dedupKey).toString('base64').replace(/[+/=]/g, '_').slice(0, 60);
 
   try {
-    const checkRes = await fetch(`${fsBase}/postbackConversions/${dedupDocId}${key}`);
-    const checkDoc = await checkRes.json();
-    if (checkDoc.fields) {
-      console.log('[postback] ↩ Duplicate blocked:', dedupKey);
-      await writeLog(fsBase, key, 'duplicate', 'Duplicate conversion — already processed', parsed, '', Date.now() - startTime, receivedAt);
+    const checkSnap = await db.collection('postbackConversions').doc(dedupDocId).get();
+    if (checkSnap.exists) {
+      console.log('[postback] ↩ REJECTED — duplicate:', dedupKey, 'docId=', dedupDocId);
+      await writeLog(db, 'duplicate', 'Duplicate conversion — already processed', parsed, checkSnap.data()?.completionId || '', Date.now() - startTime, receivedAt);
       return res.status(200).json({ received: true, status: 'duplicate' });
     }
-  } catch { /* NOT_FOUND is expected for new conversions */ }
+  } catch (e) {
+    console.error('[postback] ⚠ dedup check failed (continuing):', e.message);
+  }
 
-  // ── Find pending task completion ──────────────────────────────────────────
-  let completionId = null;
-
+  // ── Find active task completion ───────────────────────────────────────────
+  let completion = null;
   if (userId && taskId) {
-    try {
-      const queryRes = await fetch(`${fsBase}:runQuery${key}`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          structuredQuery: {
-            from:  [{ collectionId: 'taskCompletions' }],
-            where: {
-              compositeFilter: {
-                op: 'AND',
-                filters: [
-                  { fieldFilter: { field: { fieldPath: 'userId' }, op: 'EQUAL', value: { stringValue: userId } } },
-                  { fieldFilter: { field: { fieldPath: 'taskId' }, op: 'EQUAL', value: { stringValue: taskId } } },
-                  { fieldFilter: { field: { fieldPath: 'status' }, op: 'IN', value: { arrayValue: { values: [{ stringValue: 'pending' }, { stringValue: 'platform_pending' }] } } } },
-                ],
-              },
-            },
-            limit: 1,
-          },
-        }),
-      });
-      const queryData = await queryRes.json();
-      if (Array.isArray(queryData) && queryData[0]?.document?.name) {
-        completionId = queryData[0].document.name.split('/').pop();
-        console.log(`[postback] ✓ Found pending completion ${completionId}`);
-      } else {
-        console.log(`[postback] ⚠ No pending completion for userId=${userId} taskId=${taskId}`);
-      }
-    } catch (e) {
-      console.warn('[postback] ⚠ Could not query taskCompletions:', e.message);
+    completion = await findActiveCompletion(db, userId, taskId);
+    if (completion) {
+      console.log(`[postback] ✓ Found active completion docId=${completion.id} status=${completion.status}`);
+    } else {
+      console.log(`[postback] ⚠ No active completion for userId=${userId} taskId=${taskId} (docId tried: ${completionDocId(userId, taskId)})`);
     }
   } else {
-    console.warn(`[postback] ⚠ userId or taskId empty — userId=${userId} taskId=${taskId}`);
+    console.warn(`[postback] ⚠ ACCEPTED BUT INCOMPLETE — userId or taskId empty — userId=${userId} taskId=${taskId}`);
   }
 
   // ── Write initial conversion record (idempotency lock) ────────────────────
-  await patchDocument(fsBase, key, `postbackConversions/${dedupDocId}`, {
-    platformId:           { stringValue: platformId },
-    displayName:          { stringValue: displayName },
-    externalConversionId: { stringValue: convId },
-    dedupKey:             { stringValue: dedupKey },
-    userId:               { stringValue: userId },
-    taskId:               { stringValue: taskId },
-    status:               { stringValue: 'processing' },
-    conversionStatus:     { stringValue: status },
-    amount:               { doubleValue: payout },
-    rawParams:            { stringValue: JSON.stringify(rawParams).slice(0, 2000) },
-    receivedAt:           { stringValue: receivedAt },
-    processedAt:          { nullValue: null },
-    completionId:         { stringValue: '' },
-    error:                { stringValue: '' },
-  });
+  try {
+    await db.collection('postbackConversions').doc(dedupDocId).set({
+      platformId,
+      displayName,
+      externalConversionId: convId,
+      dedupKey,
+      userId,
+      taskId,
+      status: 'processing',
+      conversionStatus: status,
+      amount: payout,
+      rawParams: JSON.stringify(rawParams).slice(0, 2000),
+      receivedAt,
+      processedAt: null,
+      completionId: completion?.id || '',
+      error: '',
+    });
+    console.log(`[postback] 📝 wrote postbackConversions/${dedupDocId} (lock)`);
+  } catch (e) {
+    console.error(`[postback] ❌ FAILED to write postbackConversions/${dedupDocId}:`, e.message);
+  }
 
   // ── Settle ────────────────────────────────────────────────────────────────
-  let finalStatus  = 'skipped';
-  let logType      = 'skipped';
-  let logMessage   = 'No matching pending completion found';
+  let finalStatus = 'skipped';
+  let logType = 'skipped';
+  let logMessage = 'No matching active completion found';
 
   if (status === 'approved') {
-    if (completionId) {
-      const settled = await settleApproved(fsBase, key, completionId, platformId, displayName, convId, payout);
-      if (settled) {
+    if (completion) {
+      if (completion.status === 'user_confirmed' || completion.status === 'platform_pending') {
+        await settleFullyVerified(db, completion.id, platformId, displayName, convId, payout);
         finalStatus = 'settled';
-        logType     = 'settled';
-        logMessage  = 'Conversion settled — completion moved to platform_approved';
+        logType = 'settled';
+        logMessage = 'Both postback and user confirmed — moved to platform_approved';
+        console.log(`[postback] ✅ ACCEPTED — settled → platform_approved | completion=${completion.id}`);
+      } else {
+        // started or postback_verified — store postback, wait for user confirmation
+        await settlePostbackOnly(db, completion.id, platformId, displayName, convId, payout);
+        finalStatus = 'postback_stored';
+        logType = 'postback_stored';
+        logMessage = 'Postback stored — awaiting user confirmation';
+        console.log(`[postback] 📦 ACCEPTED — postback stored → postback_verified | completion=${completion.id}`);
       }
+    } else {
+      console.warn(`[postback] ⚠ REJECTED (skipped) — approved postback but no active completion — userId=${userId} taskId=${taskId}`);
     }
   } else {
     // rejected
-    if (completionId) await settleRejected(fsBase, key, completionId, platformId, displayName, convId, userId);
+    if (completion) {
+      if (completion.status === 'user_confirmed' || completion.status === 'platform_pending') {
+        await settleRejectedWithReversal(db, completion.id, platformId, displayName, convId, completion.reward);
+      } else {
+        await settleRejected(db, completion.id, platformId, displayName, convId);
+      }
+    }
     finalStatus = 'rejected';
-    logType     = 'rejected';
-    logMessage  = 'Conversion rejected by platform';
+    logType = 'rejected';
+    logMessage = 'Conversion rejected by platform';
+    console.log(`[postback] ❌ ACCEPTED — rejected by platform | completion=${completion?.id || '(none)'}`);
   }
 
   // ── Finalise conversion record ────────────────────────────────────────────
   const processingMs = Date.now() - startTime;
-  await patchDocument(fsBase, key, `postbackConversions/${dedupDocId}`, {
-    status:       { stringValue: finalStatus },
-    completionId: { stringValue: completionId || '' },
-    processedAt:  { stringValue: new Date().toISOString() },
-    processingMs: { integerValue: processingMs },
-  });
+  try {
+    await db.collection('postbackConversions').doc(dedupDocId).update({
+      status: finalStatus,
+      completionId: completion?.id || '',
+      processedAt: new Date().toISOString(),
+      processingMs,
+    });
+  } catch (e) {
+    console.error(`[postback] ❌ FAILED to finalise postbackConversions/${dedupDocId}:`, e.message);
+  }
 
-  await writeLog(fsBase, key, logType, logMessage, parsed, completionId || '', processingMs, receivedAt);
+  await writeLog(db, logType, logMessage, parsed, completion?.id || '', processingMs, receivedAt);
 
-  console.log(`[postback] ✅ Done platform=${platformId} user=${userId} task=${taskId} final=${finalStatus} ms=${processingMs}`);
+  console.log(`[postback] DONE platform=${platformId} user=${userId} task=${taskId} final=${finalStatus} completionId=${completion?.id || '(none)'} ms=${processingMs}`);
 
   return res.status(200).json({
-    received:     true,
-    status:       finalStatus,
+    received: true,
+    status: finalStatus,
     platformId,
     userId,
     taskId,
-    completionId: completionId || null,
+    completionId: completion?.id || null,
     payout,
     processingMs,
   });
 }
 
+// ── Completion lookup ──────────────────────────────────────────────────────────
+
+async function findActiveCompletion(db, userId, taskId) {
+  try {
+    // 1. Deterministic ID fast path — matches client-side completionDocId().
+    const docId = completionDocId(userId, taskId);
+    const snap = await db.collection('taskCompletions').doc(docId).get();
+    if (snap.exists) {
+      const data = snap.data();
+      const s = data?.status;
+      if (ACTIVE_STATUSES.includes(s)) {
+        return { id: snap.id, status: s, reward: Number(data?.reward || 0) };
+      }
+      return null; // exists but terminal status — nothing to do
+    }
+
+    // 2. Legacy fallback — auto-ID documents created before the deterministic-ID migration.
+    const legacySnap = await db.collection('taskCompletions')
+      .where('taskId', '==', taskId)
+      .where('userId', '==', userId)
+      .where('status', 'in', ACTIVE_STATUSES)
+      .limit(1)
+      .get();
+    if (legacySnap.empty) return null;
+    const d = legacySnap.docs[0];
+    return { id: d.id, status: d.data().status, reward: Number(d.data().reward || 0) };
+  } catch (e) {
+    console.warn('[postback] ⚠ findActiveCompletion error:', e.message);
+    return null;
+  }
+}
+
 // ── Settlement helpers ────────────────────────────────────────────────────────
 
-async function settleApproved(fsBase, key, completionId, platformId, displayName, convId, payout) {
+async function settleFullyVerified(db, completionId, platformId, displayName, convId, payout) {
   try {
-    const now = new Date().toISOString();
-    await patchDocument(fsBase, key, `taskCompletions/${completionId}`, {
-      status:             { stringValue: 'platform_approved' },
-      verifiedBy:         { stringValue: platformId },
-      platformVerifiedAt: { stringValue: now },
-      platformVerifiedBy: { stringValue: platformId },
-      platformName:       { stringValue: displayName },
-      postbackConvId:     { stringValue: convId },
-      postbackAmount:     { doubleValue: payout },
+    await db.collection('taskCompletions').doc(completionId).update({
+      status: 'platform_approved',
+      verifiedBy: platformId,
+      platformVerifiedAt: admin.firestore.FieldValue.serverTimestamp(),
+      platformVerifiedBy: platformId,
+      platformName: displayName,
+      postbackConvId: convId,
+      postbackAmount: payout,
     });
-    return true;
   } catch (e) {
-    console.error('[postback] settleApproved failed:', e.message);
-    return false;
+    console.error('[postback] ❌ settleFullyVerified failed:', e.message);
   }
 }
 
-async function settleRejected(fsBase, key, completionId, platformId, displayName, convId, userId) {
+async function settlePostbackOnly(db, completionId, platformId, displayName, convId, payout) {
   try {
-    await patchDocument(fsBase, key, `taskCompletions/${completionId}`, {
-      status:             { stringValue: 'rejected' },
-      verifiedBy:         { stringValue: platformId },
-      platformVerifiedAt: { stringValue: new Date().toISOString() },
-      platformName:       { stringValue: displayName },
-      postbackConvId:     { stringValue: convId },
-      rejectReason:       { stringValue: 'Rejected by platform' },
+    await db.collection('taskCompletions').doc(completionId).update({
+      status: 'postback_verified',
+      verifiedBy: platformId,
+      platformVerifiedAt: admin.firestore.FieldValue.serverTimestamp(),
+      platformVerifiedBy: platformId,
+      platformName: displayName,
+      postbackConvId: convId,
+      postbackAmount: payout,
     });
   } catch (e) {
-    console.error('[postback] settleRejected failed:', e.message);
+    console.error('[postback] ❌ settlePostbackOnly failed:', e.message);
   }
 }
 
-// ── Firestore helpers ─────────────────────────────────────────────────────────
-
-async function loadPostbackSecret(fsBase, key) {
+async function settleRejectedWithReversal(db, completionId, platformId, displayName, convId, reward) {
   try {
-    const res  = await fetch(`${fsBase}/settings/general${key}`);
-    const doc  = await res.json();
-    if (!doc.fields) return '';
-    const nk = doc.fields?.networkKeys?.mapValue?.fields;
-    return nk?.postbackSecret?.stringValue
-      || doc.fields?.postbackSecret?.stringValue
-      || '';
+    const ref = db.collection('taskCompletions').doc(completionId);
+    const snap = await ref.get();
+    if (!snap.exists) return;
+    const userId = snap.data()?.userId;
+    await db.runTransaction(async (tx) => {
+      tx.update(ref, {
+        status: 'rejected',
+        verifiedBy: platformId,
+        platformVerifiedAt: admin.firestore.FieldValue.serverTimestamp(),
+        platformName: displayName,
+        postbackConvId: convId,
+        rejectReason: 'Rejected by platform',
+      });
+      if (userId && reward > 0) {
+        tx.update(db.collection('users').doc(userId), {
+          pendingBalance: admin.firestore.FieldValue.increment(-reward),
+        });
+      }
+    });
+  } catch (e) {
+    console.error('[postback] ❌ settleRejectedWithReversal failed:', e.message);
+  }
+}
+
+async function settleRejected(db, completionId, platformId, displayName, convId) {
+  try {
+    await db.collection('taskCompletions').doc(completionId).update({
+      status: 'rejected',
+      verifiedBy: platformId,
+      platformVerifiedAt: admin.firestore.FieldValue.serverTimestamp(),
+      platformName: displayName,
+      postbackConvId: convId,
+      rejectReason: 'Rejected by platform',
+    });
+  } catch (e) {
+    console.error('[postback] ❌ settleRejected failed:', e.message);
+  }
+}
+
+// ── Misc Firestore helpers ─────────────────────────────────────────────────────
+
+async function loadPostbackSecret(db) {
+  try {
+    const snap = await db.collection('settings').doc('general').get();
+    if (!snap.exists) return '';
+    const data = snap.data();
+    return data?.networkKeys?.postbackSecret || data?.postbackSecret || '';
   } catch {
     return '';
   }
 }
 
-async function patchDocument(fsBase, key, path, fields) {
-  const fieldPaths = Object.keys(fields)
-    .map(k => `updateMask.fieldPaths=${encodeURIComponent(k)}`)
-    .join('&');
+async function writeLog(db, type, message, parsed, completionId, processingMs, receivedAt) {
   try {
-    const res = await fetch(`${fsBase}/${path}${key}&${fieldPaths}`, {
-      method:  'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ fields }),
-    });
-    if (!res.ok) {
-      const body = await res.text();
-      console.warn(`[postback] PATCH ${path} → ${res.status}: ${body.slice(0, 200)}`);
-    }
-    return res.ok;
-  } catch (e) {
-    console.warn(`[postback] PATCH ${path} error:`, e.message);
-    return false;
-  }
-}
-
-async function writeLog(fsBase, key, type, message, parsed, completionId, processingMs, receivedAt) {
-  const id = crypto.randomBytes(16).toString('hex');
-  try {
-    await fetch(`${fsBase}/postbackLogs${key}`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        fields: {
-          type:         { stringValue: type },
-          message:      { stringValue: message },
-          platformId:   { stringValue: parsed.platformId },
-          displayName:  { stringValue: parsed.displayName },
-          userId:       { stringValue: parsed.userId },
-          taskId:       { stringValue: parsed.taskId },
-          convId:       { stringValue: parsed.convId },
-          completionId: { stringValue: completionId },
-          amount:       { doubleValue: parsed.payout },
-          processingMs: { integerValue: processingMs },
-          receivedAt:   { stringValue: receivedAt },
-          createdAt:    { stringValue: new Date().toISOString() },
-        },
-      }),
+    await db.collection('postbackLogs').add({
+      type,
+      message,
+      platformId: parsed.platformId,
+      displayName: parsed.displayName,
+      userId: parsed.userId,
+      taskId: parsed.taskId,
+      convId: parsed.convId,
+      completionId,
+      amount: parsed.payout,
+      processingMs,
+      receivedAt,
+      createdAt: new Date().toISOString(),
     });
   } catch (e) {
-    console.warn('[postback] writeLog failed:', e.message);
+    console.warn('[postback] ⚠ writeLog failed:', e.message);
   }
 }

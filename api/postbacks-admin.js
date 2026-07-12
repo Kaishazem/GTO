@@ -1,6 +1,65 @@
 // api/postbacks-admin.js — Admin monitoring endpoint for postback conversions
 // Returns paginated conversion history, logs, and aggregate stats.
 // Protected by postback secret stored in Firestore settings.
+//
+// Uses the Firebase Admin SDK (service-account credentials) — see
+// .agents/memory/postback-admin-sdk-required.md for why the previous
+// REST+API-key approach silently failed under Firestore Security Rules
+// (postbackConversions/postbackLogs are `allow read, write: if isAdmin()`,
+// which requires request.auth; unauthenticated REST calls have none).
+
+import admin from 'firebase-admin';
+
+const projectId = process.env.FIREBASE_PROJECT_ID
+  || process.env.VITE_FIREBASE_PROJECT_ID;
+
+const clientEmail = process.env.FIREBASE_ADMIN_CLIENT_EMAIL
+  || process.env.FIREBASE_CLIENT_EMAIL;
+
+const rawKey = process.env.FIREBASE_ADMIN_PRIVATE_KEY
+  || process.env.FIREBASE_PRIVATE_KEY;
+
+function normaliseKey(raw) {
+  if (!raw) return null;
+  let key = raw
+    .replace(/^["']|["']$/g, '')
+    .replace(/\\\\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/\r\n/g, '\n')
+    .trim();
+  if (!key.includes('\n')) {
+    const m = key.match(/-----BEGIN ([^-]+)-----\s*([\s\S]+?)\s*-----END \1-----/);
+    if (m) {
+      const body = m[2].replace(/\s+/g, '');
+      const lines = body.match(/.{1,64}/g) ?? [];
+      key = `-----BEGIN ${m[1]}-----\n${lines.join('\n')}\n-----END ${m[1]}-----\n`;
+    } else {
+      console.error('[postbacks-admin] ❌ private key is not valid PEM.');
+      return null;
+    }
+  }
+  return key;
+}
+
+const privateKey = normaliseKey(rawKey);
+
+let db = null;
+let initError = null;
+
+if (!projectId || !clientEmail || !privateKey) {
+  initError = 'Missing Firebase Admin credentials';
+  console.error('[postbacks-admin] ❌', initError);
+} else if (!admin.apps.length) {
+  try {
+    admin.initializeApp({ credential: admin.credential.cert({ projectId, clientEmail, privateKey }), projectId });
+    db = admin.firestore();
+  } catch (err) {
+    initError = err?.message || String(err);
+    console.error('[postbacks-admin] ❌ Firebase Admin init failed:', initError);
+  }
+} else {
+  db = admin.firestore();
+}
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -10,31 +69,17 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
-  const firebaseProjectId =
-    process.env.VITE_FIREBASE_PROJECT_ID ||
-    process.env.FIREBASE_PROJECT_ID ||
-    'green-task-orbit';
-  const firebaseApiKey =
-    process.env.VITE_FIREBASE_API_KEY ||
-    process.env.FIREBASE_API_KEY;
-
-  if (!firebaseApiKey) {
-    return res.status(500).json({ error: 'Server configuration error' });
+  if (!db) {
+    return res.status(500).json({ error: initError || 'Server configuration error' });
   }
-
-  const fsBase = `https://firestore.googleapis.com/v1/projects/${firebaseProjectId}/databases/(default)/documents`;
-  const key    = `?key=${firebaseApiKey}`;
 
   // ── 1. Auth: validate admin secret from Firestore settings ──────────────────
   const suppliedSecret = req.query.secret || req.headers['x-admin-secret'] || '';
 
   try {
-    const settingsRes = await fetch(`${fsBase}/settings/general${key}`);
-    const settingsDoc = await settingsRes.json();
-    const storedSecret =
-      settingsDoc.fields?.networkKeys?.mapValue?.fields?.postbackSecret?.stringValue ||
-      settingsDoc.fields?.postbackSecret?.stringValue ||
-      '';
+    const settingsSnap = await db.collection('settings').doc('general').get();
+    const data = settingsSnap.exists ? settingsSnap.data() : {};
+    const storedSecret = data?.networkKeys?.postbackSecret || data?.postbackSecret || '';
 
     // Require a non-empty secret; "change-me-in-admin-settings" is treated as unset
     if (storedSecret && storedSecret !== 'change-me-in-admin-settings') {
@@ -44,7 +89,6 @@ export default async function handler(req, res) {
     }
   } catch (e) {
     console.warn('[postbacks-admin] Could not verify secret from Firestore:', e.message);
-    // Proceed in dev mode (no stored secret)
   }
 
   // ── 2. Parse query options ───────────────────────────────────────────────────
@@ -55,19 +99,7 @@ export default async function handler(req, res) {
   // ── 3. Fetch postbackConversions ─────────────────────────────────────────────
   let conversions = [];
   try {
-    const queryBody = buildConversionsQuery(filterStatus, filterPlatform, pageSize);
-    const qRes = await fetch(`${fsBase}:runQuery${key}`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(queryBody),
-    });
-    const qData = await qRes.json();
-
-    if (Array.isArray(qData)) {
-      conversions = qData
-        .filter(r => r.document?.fields)
-        .map(r => parseConversionDoc(r.document));
-    }
+    conversions = await queryConversions(db, filterStatus, filterPlatform, pageSize);
   } catch (e) {
     console.error('[postbacks-admin] Error fetching conversions:', e.message);
   }
@@ -75,33 +107,18 @@ export default async function handler(req, res) {
   // ── 4. Fetch recent postbackLogs (last 100) ───────────────────────────────────
   let logs = [];
   try {
-    const logsRes = await fetch(`${fsBase}/postbackLogs${key}&pageSize=100&orderBy=createdAt+desc`);
-    const logsData = await logsRes.json();
-    if (Array.isArray(logsData.documents)) {
-      logs = logsData.documents.map(d => parseLogDoc(d));
-    }
+    const logsSnap = await db.collection('postbackLogs').orderBy('createdAt', 'desc').limit(100).get();
+    logs = logsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
   } catch (e) {
     console.warn('[postbacks-admin] Error fetching logs:', e.message);
   }
 
   // ── 5. Build aggregate stats ─────────────────────────────────────────────────
-  // Fetch all conversions for stats (up to 500)
   let allForStats = conversions;
   if (filterStatus !== 'all' || filterPlatform) {
     try {
-      const allQuery = buildConversionsQuery('all', '', 500);
-      const allRes = await fetch(`${fsBase}:runQuery${key}`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify(allQuery),
-      });
-      const allData = await allRes.json();
-      if (Array.isArray(allData)) {
-        allForStats = allData
-          .filter(r => r.document?.fields)
-          .map(r => parseConversionDoc(r.document));
-      }
-    } catch {}
+      allForStats = await queryConversions(db, 'all', '', 500);
+    } catch { /* keep the filtered set as fallback */ }
   }
 
   const stats = buildStats(allForStats, logs);
@@ -114,96 +131,14 @@ export default async function handler(req, res) {
   });
 }
 
-// ── Query builder ─────────────────────────────────────────────────────────────
-function buildConversionsQuery(filterStatus, filterPlatform, pageSize) {
-  const filters = [];
-
-  if (filterStatus && filterStatus !== 'all') {
-    filters.push({
-      fieldFilter: {
-        field: { fieldPath: 'status' },
-        op:    'EQUAL',
-        value: { stringValue: filterStatus },
-      },
-    });
-  }
-
-  if (filterPlatform) {
-    filters.push({
-      fieldFilter: {
-        field: { fieldPath: 'platformId' },
-        op:    'EQUAL',
-        value: { stringValue: filterPlatform },
-      },
-    });
-  }
-
-  const structuredQuery = {
-    from:    [{ collectionId: 'postbackConversions' }],
-    orderBy: [{ field: { fieldPath: 'receivedAt' }, direction: 'DESCENDING' }],
-    limit:   pageSize,
-  };
-
-  if (filters.length === 1) {
-    structuredQuery.where = { fieldFilter: filters[0].fieldFilter };
-  } else if (filters.length > 1) {
-    structuredQuery.where = { compositeFilter: { op: 'AND', filters } };
-  }
-
-  return { structuredQuery };
-}
-
-// ── Document parsers ──────────────────────────────────────────────────────────
-function fv(field) {
-  if (!field) return undefined;
-  if ('stringValue'  in field) return field.stringValue;
-  if ('booleanValue' in field) return field.booleanValue;
-  if ('integerValue' in field) return Number(field.integerValue);
-  if ('doubleValue'  in field) return Number(field.doubleValue);
-  if ('nullValue'    in field) return null;
-  return undefined;
-}
-
-function parseConversionDoc(doc) {
-  const f  = doc.fields || {};
-  const id = doc.name?.split('/').pop() || '';
-  return {
-    id,
-    platformId:           fv(f.platformId)           || '',
-    platformName:         fv(f.platformName)          || fv(f.platformId) || '',
-    externalConversionId: fv(f.externalConversionId) || '',
-    dedupKey:             fv(f.dedupKey)              || '',
-    userId:               fv(f.userId)               || '',
-    taskId:               fv(f.taskId)               || '',
-    completionId:         fv(f.completionId)         || '',
-    status:               fv(f.status)               || 'unknown',
-    conversionStatus:     fv(f.conversionStatus)     || 'approved',
-    amount:               Number(fv(f.amount)        || 0),
-    error:                fv(f.error)                || '',
-    processingMs:         Number(fv(f.processingMs)  || 0),
-    receivedAt:           fv(f.receivedAt)           || '',
-    processedAt:          fv(f.processedAt)          || '',
-  };
-}
-
-function parseLogDoc(doc) {
-  const f  = doc.fields || {};
-  const id = doc.name?.split('/').pop() || '';
-  return {
-    id,
-    type:        fv(f.type)       || '',
-    message:     fv(f.message)    || '',
-    platformId:  fv(f.platformId) || '',
-    userId:      fv(f.userId)     || '',
-    taskId:      fv(f.taskId)     || '',
-    convId:      fv(f.convId)     || '',
-    status:      fv(f.status)     || '',
-    amount:      Number(fv(f.amount) || 0),
-    completionId:fv(f.completionId) || '',
-    processingMs:Number(fv(f.processingMs) || 0),
-    receivedAt:  fv(f.receivedAt) || '',
-    createdAt:   fv(f.createdAt)  || '',
-  };
+// ── Query helper ───────────────────────────────────────────────────────────────
+async function queryConversions(db, filterStatus, filterPlatform, pageSize) {
+  let q = db.collection('postbackConversions');
+  if (filterStatus && filterStatus !== 'all') q = q.where('status', '==', filterStatus);
+  if (filterPlatform) q = q.where('platformId', '==', filterPlatform);
+  q = q.orderBy('receivedAt', 'desc').limit(pageSize);
+  const snap = await q.get();
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 }
 
 // ── Stats aggregation ─────────────────────────────────────────────────────────
@@ -218,18 +153,16 @@ function buildStats(conversions, logs) {
 
   const totalSettledAmount = conversions
     .filter(c => c.status === 'settled')
-    .reduce((s, c) => s + c.amount, 0);
+    .reduce((s, c) => s + Number(c.amount || 0), 0);
 
-  // Platform breakdown
   const byPlatform = {};
   conversions.forEach(c => {
     const p = c.platformName || c.platformId || 'unknown';
     if (!byPlatform[p]) byPlatform[p] = { total: 0, settled: 0, amount: 0 };
     byPlatform[p].total++;
-    if (c.status === 'settled') { byPlatform[p].settled++; byPlatform[p].amount += c.amount; }
+    if (c.status === 'settled') { byPlatform[p].settled++; byPlatform[p].amount += Number(c.amount || 0); }
   });
 
-  // Log type breakdown
   const logsByType = {};
   logs.forEach(l => {
     logsByType[l.type] = (logsByType[l.type] || 0) + 1;
@@ -241,7 +174,7 @@ function buildStats(conversions, logs) {
     byPlatform,
     logsByType,
     avgProcessingMs: total > 0
-      ? Math.round(conversions.reduce((s, c) => s + c.processingMs, 0) / total)
+      ? Math.round(conversions.reduce((s, c) => s + Number(c.processingMs || 0), 0) / total)
       : 0,
   };
 }
