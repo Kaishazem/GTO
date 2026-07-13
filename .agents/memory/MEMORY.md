@@ -8,3 +8,4 @@
 - [taskCompletions deterministic ID](task-completions-deterministic-id.md) — doc ID is userId_taskId; enforces one doc per (user,task); setDoc replaces addDoc; getDoc replaces completions.find(); engine uses getDoc fast-path then falls back to legacy query.
 - [Vercel postback endpoints need Admin SDK](postback-admin-sdk-required.md) — REST+API-key writes to rule-guarded collections (taskCompletions, postbackConversions, postbackLogs) are unauthenticated and get silently rejected; always use firebase-admin in api/*.js for these.
 - [Duplicate dev process 500s](dev-server-duplicate-process-500s.md) — stray duplicate tsx/vite processes make every route hang ~18s then 500 with empty body; check `ps aux` before debugging route logic.
+- [Postback dual-implementation parity](postback-single-source-of-truth.md) — Express engine.ts and Vercel postback.js must write byte-identical Firestore docs (same doc-ID formula, single write, same field set), not just same HTTP outcome.

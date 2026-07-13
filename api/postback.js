@@ -24,7 +24,6 @@
 // 'user_confirmed' — those were never matched, so completionId was always
 // null for brand-new (non-legacy) completions.
 
-import crypto from 'crypto';
 import admin from 'firebase-admin';
 import { parsePostback } from './_modules/postbackParser.js';
 
@@ -93,6 +92,27 @@ if (!projectId || !clientEmail || !privateKey) {
 } else {
   db = admin.firestore();
 }
+
+// ── UNIFICATION FIX (Codex architecture review) ────────────────────────────────
+// This handler previously diverged from server/postback/engine.ts (the Express /
+// dev implementation) in two structural ways, even though both used the Admin
+// SDK and the same parser/adapters:
+//
+//   1. Doc-ID scheme: this file base64-encoded the dedupKey into a sanitised
+//      Firestore document ID for `postbackConversions`. engine.ts uses the raw
+//      dedupKey string as the document ID. Same logical event → two different
+//      document IDs depending on which implementation processed it.
+//   2. Write pattern: this file wrote an early "processing" lock document and
+//      then updated it after settlement (two writes). engine.ts computes the
+//      final status first and writes the conversion document exactly once.
+//
+// Fixed below so both implementations produce byte-identical Firestore writes
+// for the same input: same dedupKey-as-doc-ID, same single write-at-the-end
+// pattern, same log document shape (no extra `displayName` field that
+// engine.ts's LogDoc never had). Parsing (postbackParser.js/postbackAdapters.js),
+// tracking-param extraction, OGAds URL generation, and the completion lifecycle
+// (ACTIVE_STATUSES, settleFullyVerified/settlePostbackOnly/settleRejected*) were
+// already identical and are untouched.
 
 // Statuses that represent a taskCompletion still awaiting resolution.
 // Must mirror server/postback/engine.ts ACTIVE_STATUSES exactly.
@@ -164,121 +184,104 @@ export default async function handler(req, res) {
   }
 
   // ── Deduplication ─────────────────────────────────────────────────────────
+  // Doc ID = raw dedupKey, matching engine.ts exactly (no base64 encoding).
+  // This ensures the same logical event maps to the same postbackConversions
+  // document regardless of which implementation (Express or Vercel) handles it.
   const dedupKey = convId ? `${platformId}_${convId}` : `${platformId}_${userId}_${taskId}`;
-  const dedupDocId = Buffer.from(dedupKey).toString('base64').replace(/[+/=]/g, '_').slice(0, 60);
 
+  let existing;
   try {
-    const checkSnap = await db.collection('postbackConversions').doc(dedupDocId).get();
-    if (checkSnap.exists) {
-      console.log('[postback] ↩ REJECTED — duplicate:', dedupKey, 'docId=', dedupDocId);
-      await writeLog(db, 'duplicate', 'Duplicate conversion — already processed', parsed, checkSnap.data()?.completionId || '', Date.now() - startTime, receivedAt);
-      return res.status(200).json({ received: true, status: 'duplicate' });
-    }
+    existing = await db.collection('postbackConversions').doc(dedupKey).get();
   } catch (e) {
     console.error('[postback] ⚠ dedup check failed (continuing):', e.message);
+    existing = null;
+  }
+  if (existing && existing.exists) {
+    console.log('[postback] ↩ REJECTED — duplicate:', dedupKey);
+    await writeLog(db, 'duplicate', 'Duplicate conversion — already processed', parsed, existing.data()?.completionId || '', Date.now() - startTime, receivedAt);
+    return res.status(200).json({
+      received: true,
+      status: 'duplicate',
+      platformId,
+      userId,
+      taskId,
+      completionId: existing.data()?.completionId || null,
+      payout,
+      processingMs: Date.now() - startTime,
+    });
   }
 
   // ── Find active task completion ───────────────────────────────────────────
-  let completion = null;
-  if (userId && taskId) {
-    completion = await findActiveCompletion(db, userId, taskId);
-    if (completion) {
-      console.log(`[postback] ✓ Found active completion docId=${completion.id} status=${completion.status}`);
-    } else {
-      console.log(`[postback] ⚠ No active completion for userId=${userId} taskId=${taskId} (docId tried: ${completionDocId(userId, taskId)})`);
-    }
+  const completion = (userId && taskId) ? await findActiveCompletion(db, userId, taskId) : null;
+  if (completion) {
+    console.log(`[postback] ✓ Found active completion docId=${completion.id} status=${completion.status}`);
+  } else if (userId && taskId) {
+    console.log(`[postback] ⚠ No active completion for userId=${userId} taskId=${taskId} (docId tried: ${completionDocId(userId, taskId)})`);
   } else {
     console.warn(`[postback] ⚠ ACCEPTED BUT INCOMPLETE — userId or taskId empty — userId=${userId} taskId=${taskId}`);
   }
 
-  // ── Write initial conversion record (idempotency lock) ────────────────────
-  try {
-    await db.collection('postbackConversions').doc(dedupDocId).set({
-      platformId,
-      displayName,
-      externalConversionId: convId,
-      dedupKey,
-      userId,
-      taskId,
-      status: 'processing',
-      conversionStatus: status,
-      amount: payout,
-      rawParams: JSON.stringify(rawParams).slice(0, 2000),
-      receivedAt,
-      processedAt: null,
-      completionId: completion?.id || '',
-      error: '',
-    });
-    console.log(`[postback] 📝 wrote postbackConversions/${dedupDocId} (lock)`);
-  } catch (e) {
-    console.error(`[postback] ❌ FAILED to write postbackConversions/${dedupDocId}:`, e.message);
-  }
+  const processingMs = () => Date.now() - startTime;
 
-  // ── Settle ────────────────────────────────────────────────────────────────
-  let finalStatus = 'skipped';
-  let logType = 'skipped';
-  let logMessage = 'No matching active completion found';
-
+  // ── Approved postback ──────────────────────────────────────────────────────
   if (status === 'approved') {
-    if (completion) {
-      if (completion.status === 'user_confirmed' || completion.status === 'platform_pending') {
-        await settleFullyVerified(db, completion.id, platformId, displayName, convId, payout);
-        finalStatus = 'settled';
-        logType = 'settled';
-        logMessage = 'Both postback and user confirmed — moved to platform_approved';
-        console.log(`[postback] ✅ ACCEPTED — settled → platform_approved | completion=${completion.id}`);
-      } else {
-        // started or postback_verified — store postback, wait for user confirmation
-        await settlePostbackOnly(db, completion.id, platformId, displayName, convId, payout);
-        finalStatus = 'postback_stored';
-        logType = 'postback_stored';
-        logMessage = 'Postback stored — awaiting user confirmation';
-        console.log(`[postback] 📦 ACCEPTED — postback stored → postback_verified | completion=${completion.id}`);
-      }
-    } else {
-      console.warn(`[postback] ⚠ REJECTED (skipped) — approved postback but no active completion — userId=${userId} taskId=${taskId}`);
+    if (!completion) {
+      console.warn(`[postback] ⚠ approved postback but no active completion found | platform=${platformId} userId=${userId} taskId=${taskId}`);
+      await writeConversion(db, dedupKey, parsed, '', 'skipped_no_completion', processingMs(), receivedAt);
+      await writeLog(db, 'skipped', 'Approved postback received but no matching active completion found', parsed, '', processingMs(), receivedAt);
+      return res.status(200).json({
+        received: true, status: 'skipped', platformId, userId, taskId,
+        completionId: null, payout, processingMs: processingMs(),
+      });
     }
-  } else {
-    // rejected
-    if (completion) {
-      if (completion.status === 'user_confirmed' || completion.status === 'platform_pending') {
-        await settleRejectedWithReversal(db, completion.id, platformId, displayName, convId, completion.reward);
-      } else {
-        await settleRejected(db, completion.id, platformId, displayName, convId);
-      }
-    }
-    finalStatus = 'rejected';
-    logType = 'rejected';
-    logMessage = 'Conversion rejected by platform';
-    console.log(`[postback] ❌ ACCEPTED — rejected by platform | completion=${completion?.id || '(none)'}`);
-  }
 
-  // ── Finalise conversion record ────────────────────────────────────────────
-  const processingMs = Date.now() - startTime;
-  try {
-    await db.collection('postbackConversions').doc(dedupDocId).update({
-      status: finalStatus,
-      completionId: completion?.id || '',
-      processedAt: new Date().toISOString(),
-      processingMs,
+    if (completion.status === 'user_confirmed' || completion.status === 'platform_pending') {
+      // User already confirmed → both sides done → platform_approved
+      await settleFullyVerified(db, completion.id, platformId, displayName, convId, payout);
+      await writeConversion(db, dedupKey, parsed, completion.id, 'settled', processingMs(), receivedAt);
+      await writeLog(db, 'settled', 'Both postback and user confirmed — moved to platform_approved', parsed, completion.id, processingMs(), receivedAt);
+      console.log(`[postback] ✅ approved + user_confirmed → platform_approved | userId=${userId} taskId=${taskId}`);
+      return res.status(200).json({
+        received: true, status: 'settled', platformId, userId, taskId,
+        completionId: completion.id, payout, processingMs: processingMs(),
+      });
+    }
+
+    // started or postback_verified — store postback, wait for user confirmation
+    await settlePostbackOnly(db, completion.id, platformId, displayName, convId, payout);
+    await writeConversion(db, dedupKey, parsed, completion.id, 'postback_stored', processingMs(), receivedAt);
+    await writeLog(db, 'postback_stored', 'Postback stored — awaiting user confirmation', parsed, completion.id, processingMs(), receivedAt);
+    console.log(`[postback] 📦 approved postback stored → postback_verified | userId=${userId} taskId=${taskId}`);
+    return res.status(200).json({
+      received: true, status: 'postback_stored', platformId, userId, taskId,
+      completionId: completion.id, payout, processingMs: processingMs(),
     });
-  } catch (e) {
-    console.error(`[postback] ❌ FAILED to finalise postbackConversions/${dedupDocId}:`, e.message);
   }
 
-  await writeLog(db, logType, logMessage, parsed, completion?.id || '', processingMs, receivedAt);
+  // ── Rejected postback ──────────────────────────────────────────────────────
+  if (!completion) {
+    console.log(`[postback] ❌ rejected postback with no active completion | platform=${platformId} userId=${userId}`);
+    await writeConversion(db, dedupKey, parsed, '', 'rejected_no_completion', processingMs(), receivedAt);
+    await writeLog(db, 'rejected', 'Rejected postback — no matching active completion', parsed, '', processingMs(), receivedAt);
+    return res.status(200).json({
+      received: true, status: 'rejected', platformId, userId, taskId,
+      completionId: null, payout, processingMs: processingMs(),
+    });
+  }
 
-  console.log(`[postback] DONE platform=${platformId} user=${userId} task=${taskId} final=${finalStatus} completionId=${completion?.id || '(none)'} ms=${processingMs}`);
+  if (completion.status === 'user_confirmed' || completion.status === 'platform_pending') {
+    await settleRejectedWithReversal(db, completion.id, platformId, displayName, convId, completion.reward);
+  } else {
+    await settleRejected(db, completion.id, platformId, displayName, convId);
+  }
+
+  await writeConversion(db, dedupKey, parsed, completion.id, 'rejected', processingMs(), receivedAt);
+  await writeLog(db, 'rejected', 'Conversion rejected by platform', parsed, completion.id, processingMs(), receivedAt);
+  console.log(`[postback] ❌ rejected — platform=${platformId} userId=${userId} taskId=${taskId}`);
 
   return res.status(200).json({
-    received: true,
-    status: finalStatus,
-    platformId,
-    userId,
-    taskId,
-    completionId: completion?.id || null,
-    payout,
-    processingMs,
+    received: true, status: 'rejected', platformId, userId, taskId,
+    completionId: completion.id, payout, processingMs: processingMs(),
   });
 }
 
@@ -402,13 +405,15 @@ async function loadPostbackSecret(db) {
   }
 }
 
+// Field shape must mirror engine.ts's LogDoc exactly — no extra fields
+// (a previous version of this file added `displayName`, which engine.ts's
+// LogDoc never had and api/postbacks-admin.js's parseLogDoc never reads).
 async function writeLog(db, type, message, parsed, completionId, processingMs, receivedAt) {
   try {
     await db.collection('postbackLogs').add({
       type,
       message,
       platformId: parsed.platformId,
-      displayName: parsed.displayName,
       userId: parsed.userId,
       taskId: parsed.taskId,
       convId: parsed.convId,
@@ -420,5 +425,32 @@ async function writeLog(db, type, message, parsed, completionId, processingMs, r
     });
   } catch (e) {
     console.warn('[postback] ⚠ writeLog failed:', e.message);
+  }
+}
+
+// Field shape must mirror engine.ts's ConversionDoc exactly, and — like
+// engine.ts — this writes the conversion document exactly ONCE, after the
+// final status is known, using the raw dedupKey as the document ID.
+async function writeConversion(db, dedupKey, parsed, completionId, status, processingMs, receivedAt, error = '') {
+  try {
+    await db.collection('postbackConversions').doc(dedupKey).set({
+      platformId: parsed.platformId,
+      displayName: parsed.displayName,
+      externalConversionId: parsed.convId,
+      dedupKey,
+      userId: parsed.userId,
+      taskId: parsed.taskId,
+      completionId,
+      status,
+      conversionStatus: parsed.status,
+      amount: parsed.payout,
+      rawParams: JSON.stringify(parsed.rawParams).slice(0, 2000),
+      error,
+      processingMs,
+      receivedAt,
+      processedAt: new Date().toISOString(),
+    });
+  } catch (e) {
+    console.error('[postback] ❌ writeConversion failed:', e.message);
   }
 }
