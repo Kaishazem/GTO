@@ -3,6 +3,7 @@ import path from "path";
 import postbackRouter from "./routes/postback";
 import postbacksAdminRouter from "./routes/postbacks-admin";
 import importPlatformRouter from "./routes/import-platform";
+import importLockerRouter from "./routes/import-locker";
 import broadcastRouter from "./routes/broadcast";
 
 const app = express();
@@ -22,6 +23,7 @@ app.get("/api/health", (_req, res) => {
 app.use("/api/postback", postbackRouter);
 app.use("/api/postbacks-admin", postbacksAdminRouter);
 app.use("/api/import-platform", importPlatformRouter);
+app.use("/api/import-locker", importLockerRouter);
 app.use("/api/broadcast", broadcastRouter);
 
 // ── Production: serve Vite-built frontend ─────────────────────────────────────

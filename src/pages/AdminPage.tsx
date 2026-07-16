@@ -418,6 +418,14 @@ export default function AdminPage() {
   const [selectedImportOffersByPlatform, setSelectedImportOffersByPlatform] = useState<Record<string, Set<number>>>({});
   const [importingOffers, setImportingOffers] = useState(false);
 
+  // ── Locker Offers importer ──────────────────────────────────────────────────
+  const [importMode, setImportMode] = useState<"api" | "locker">("api");
+  const [lockerApiKey, setLockerApiKey] = useState("");
+  const [lockerOffers, setLockerOffers] = useState<Record<string, unknown>[]>([]);
+  const [selectedLockerOffers, setSelectedLockerOffers] = useState<Set<number>>(new Set());
+  const [fetchingLockerOffers, setFetchingLockerOffers] = useState(false);
+  const [importingLockerOffers, setImportingLockerOffers] = useState(false);
+
   const [conversions, setConversions] = useState<PostbackConversion[]>([]);
   const [conversionLogs, setConversionLogs] = useState<PostbackLog[]>([]);
   const [conversionStats, setConversionStats] = useState<PostbackStats | null>(null);
@@ -1374,6 +1382,113 @@ export default function AdminPage() {
       toast({ title: `✅ Imported ${imported} tasks`, description: "Imported as platform tasks." });
     } finally {
       setImportingOffers(false);
+    }
+  }
+
+  // ── Locker Offers: fetch ────────────────────────────────────────────────────
+  async function fetchLockerOffers() {
+    if (!lockerApiKey.trim()) {
+      toast({ title: "API Key Required", description: "Enter your OGAds API key.", variant: "destructive" });
+      return;
+    }
+    setFetchingLockerOffers(true);
+    setLockerOffers([]);
+    setSelectedLockerOffers(new Set());
+    try {
+      const r = await fetch("/api/import-locker", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey: lockerApiKey }),
+      });
+      const data = await r.json() as { success?: boolean; error?: string; offers?: Record<string, unknown>[]; count?: number };
+      if (!data.success) {
+        toast({ title: "Fetch Failed", description: data.error || "Unknown error", variant: "destructive" });
+        return;
+      }
+      const offers = data.offers || [];
+      setLockerOffers(offers);
+      // Pre-select all offers
+      setSelectedLockerOffers(new Set(offers.map((_, i) => i)));
+      toast({ title: `Found ${offers.length} locker offers`, description: "Review and select which to import." });
+    } catch (e) {
+      toast({ title: "Network Error", description: e instanceof Error ? e.message : "Unknown error", variant: "destructive" });
+    } finally {
+      setFetchingLockerOffers(false);
+    }
+  }
+
+  // ── Locker Offers: import selected ─────────────────────────────────────────
+  async function importLockerOffers() {
+    const toImport = lockerOffers.filter((_, i) => selectedLockerOffers.has(i));
+    if (toImport.length === 0) {
+      toast({ title: "None selected", description: "Select at least one offer to import.", variant: "destructive" });
+      return;
+    }
+    setImportingLockerOffers(true);
+    try {
+      // Dedup against existing tasks by externalId
+      const existingSnap = await getDocs(collection(db, "tasks"));
+      const existingIds = new Set<string>();
+      existingSnap.docs.forEach((d) => {
+        const eid = d.data().externalId || d.data().offerId;
+        if (eid) existingIds.add(String(eid));
+      });
+
+      const newOffers = toImport.filter((o) => {
+        const eid = String(o.externalId || "");
+        return eid && !existingIds.has(eid);
+      });
+      const skipped = toImport.length - newOffers.length;
+
+      const BATCH = 20;
+      let imported = 0;
+      for (let i = 0; i < newOffers.length; i += BATCH) {
+        const chunk = newOffers.slice(i, i + BATCH);
+        await Promise.all(
+          chunk.map((o) =>
+            addDoc(collection(db, "tasks"), {
+              platform:        "OGAds",
+              platformId:      "ogads",   // registry id → correct tracking strategy (aff_sub/aff_sub2)
+              title:           String(o.title || "Untitled Offer"),
+              description:     String(o.description || ""),
+              reward:          Number(o.payout) || 0,
+              payout:          Number(o.payout) || 0,
+              url:             String(o.url || ""),
+              externalId:      String(o.externalId || ""),
+              offerId:         String(o.externalId || ""),
+              image:           String(o.image || ""),
+              category:        String(o.category || ""),
+              countries:       Array.isArray(o.countries) ? o.countries : [],
+              devices:         Array.isArray(o.devices)   ? o.devices   : [],
+              requirements:    String(o.requirements || ""),
+              conversionType:  String(o.conversionType || ""),
+              network:         "ogads",
+              status:          "published",
+              taskType:        "platform",
+              sourceType:      "locker",   // distinguishes locker imports from API imports
+              type:            (Number(o.payout) || 0) >= 0.05 ? "premium" : "simple",
+              active:          true,
+              networkStatus:   "pending",
+              manualAdminRate: 0.35,
+              importedFrom:    "ogads_locker",
+              createdAt:       serverTimestamp(),
+            })
+          )
+        );
+        imported += chunk.length;
+      }
+
+      toast({
+        title: `✅ Imported ${imported} locker task(s)`,
+        description: skipped > 0 ? `${skipped} duplicate(s) skipped.` : "All offers imported successfully.",
+      });
+      setLockerOffers([]);
+      setSelectedLockerOffers(new Set());
+      await fetchTasks();
+    } catch (e) {
+      toast({ title: "Import Error", description: e instanceof Error ? e.message : "Network error", variant: "destructive" });
+    } finally {
+      setImportingLockerOffers(false);
     }
   }
 
@@ -4230,6 +4345,157 @@ export default function AdminPage() {
       {tab === "import" && (
         <div className="space-y-4">
 
+          {/* ── Import mode selector ───────────────────────────────────────── */}
+          <div className="flex rounded-xl overflow-hidden border border-white/10 w-fit">
+            <button
+              onClick={() => setImportMode("api")}
+              className={cn(
+                "px-5 py-2 text-sm font-medium transition-colors",
+                importMode === "api"
+                  ? "bg-emerald-500 text-white"
+                  : "bg-white/5 text-white/50 hover:bg-white/10 hover:text-white",
+              )}
+            >
+              API Offers
+            </button>
+            <button
+              onClick={() => setImportMode("locker")}
+              className={cn(
+                "px-5 py-2 text-sm font-medium transition-colors border-l border-white/10",
+                importMode === "locker"
+                  ? "bg-blue-500 text-white"
+                  : "bg-white/5 text-white/50 hover:bg-white/10 hover:text-white",
+              )}
+            >
+              Locker Offers
+            </button>
+          </div>
+
+          {/* ══════════════════════════════════════════════════════════════════
+              LOCKER OFFERS — OGAds locker offer import (simplified, key-only)
+          ══════════════════════════════════════════════════════════════════ */}
+          {importMode === "locker" && (
+            <div className="space-y-4">
+              <div className="bg-blue-500/10 border border-blue-500/20 rounded-2xl p-4 flex gap-3">
+                <AlertCircle className="w-5 h-5 text-blue-400 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-blue-300 font-medium text-sm">Locker Offers — OGAds</p>
+                  <p className="text-blue-400/70 text-xs mt-1">
+                    Imports the offers that appear inside your OGAds content locker dashboard.
+                    Imported offers become normal tasks using the existing OGAds tracking and postback pipeline (aff_sub / aff_sub2).
+                    Duplicate detection uses externalId — already-imported offers are skipped automatically.
+                  </p>
+                </div>
+              </div>
+
+              {/* API key input + fetch */}
+              <div className="bg-white/5 border border-white/10 rounded-2xl p-5 space-y-4">
+                <h3 className="font-semibold text-white text-sm flex items-center gap-2">
+                  <Zap className="w-4 h-4 text-blue-400" />
+                  OGAds Locker — Fetch Offers
+                </h3>
+                <div className="flex gap-2">
+                  <Input
+                    type="password"
+                    placeholder="OGAds Publisher API key"
+                    value={lockerApiKey}
+                    onChange={(e) => setLockerApiKey(e.target.value)}
+                    className="flex-1 bg-white/5 border-white/15 text-white placeholder:text-white/30 font-mono text-xs h-9"
+                  />
+                  <Button
+                    size="sm"
+                    onClick={fetchLockerOffers}
+                    disabled={fetchingLockerOffers || !lockerApiKey.trim()}
+                    className="bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 border border-blue-500/30 rounded-xl shrink-0"
+                    variant="outline"
+                  >
+                    {fetchingLockerOffers
+                      ? <Loader2 className="w-4 h-4 animate-spin mr-1" />
+                      : <Download className="w-4 h-4 mr-1" />}
+                    Fetch
+                  </Button>
+                </div>
+
+                {/* Offer list */}
+                {lockerOffers.length > 0 && !fetchingLockerOffers && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm text-white/60">
+                        {lockerOffers.length} offers found — select to import
+                      </p>
+                      <div className="flex gap-2">
+                        <Button size="sm" variant="outline"
+                          onClick={() => setSelectedLockerOffers(new Set(lockerOffers.map((_, i) => i)))}
+                          className="border-white/20 text-white/60 hover:text-white text-xs h-7">
+                          Select All
+                        </Button>
+                        <Button size="sm" variant="outline"
+                          onClick={() => setSelectedLockerOffers(new Set())}
+                          className="border-white/20 text-white/60 hover:text-white text-xs h-7">
+                          Deselect All
+                        </Button>
+                        <Button
+                          size="sm"
+                          onClick={importLockerOffers}
+                          disabled={importingLockerOffers || selectedLockerOffers.size === 0}
+                          className="bg-emerald-500 hover:bg-emerald-400 text-white text-xs h-7 rounded-lg"
+                        >
+                          {importingLockerOffers
+                            ? <Loader2 className="w-3 h-3 animate-spin mr-1" />
+                            : <Download className="w-3 h-3 mr-1" />}
+                          Import ({selectedLockerOffers.size})
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="space-y-2 max-h-80 overflow-y-auto">
+                      {lockerOffers.map((offer, idx) => (
+                        <label
+                          key={idx}
+                          className={cn(
+                            "flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all",
+                            selectedLockerOffers.has(idx)
+                              ? "border-blue-500/40 bg-blue-500/10"
+                              : "border-white/5 hover:border-white/10",
+                          )}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedLockerOffers.has(idx)}
+                            onChange={(e) => {
+                              const s = new Set(selectedLockerOffers);
+                              e.target.checked ? s.add(idx) : s.delete(idx);
+                              setSelectedLockerOffers(s);
+                            }}
+                            className="w-4 h-4 accent-blue-500"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-white truncate">
+                              {String(offer.title || "Untitled")}
+                            </p>
+                            <p className="text-xs text-white/40">
+                              {String(offer.description || offer.requirements || "").slice(0, 80)}
+                            </p>
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <p className="text-sm font-bold text-blue-400">
+                              {formatCurrency(Number(offer.payout) || 0)}
+                            </p>
+                            <p className="text-xs text-white/30">payout</p>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ══════════════════════════════════════════════════════════════════
+              API OFFERS — existing platform import (unchanged)
+          ══════════════════════════════════════════════════════════════════ */}
+          {importMode === "api" && (<div className="space-y-4">
+
           {/* Auto-Import Status */}
           <div className={cn("rounded-2xl p-4 border flex items-start gap-3",
             autoImportStatus === "running"   ? "bg-blue-500/10 border-blue-500/20"
@@ -4400,6 +4666,8 @@ export default function AdminPage() {
               </div>
             ))
           )}
+          </div>)}
+
         </div>
       )}
 
