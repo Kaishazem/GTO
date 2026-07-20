@@ -1,0 +1,39 @@
+Act as a Senior Full-Stack Developer and Firebase Expert. We have a critical tracking issue: **Postbacks from ad networks (OGAds) are arriving but conversions are never credited.** The system logs show `skipped_no_completion`.
+
+**Root Cause:**
+The flow breaks at the very beginning:
+1. User clicks "Start Task".
+2. The frontend function `startTask()` (in `TaskContext.tsx`) is supposed to create a document in the `taskCompletions` Firestore collection with status `started`.
+3. **FAILURE:** This document creation is failing silently or not happening at all.
+4. Consequently, when the Postback arrives later, the backend (`/api/postback`) cannot find a matching pending task (by `userId_taskId`) and rejects it.
+
+**Your Mission:**
+Debug and fix the "Start Task" to "Postback" flow to ensure reliable conversion tracking.
+
+**Implementation Plan:**
+1.  **Audit `startTask()` Function:**
+    *   Go to `/workspace/src/contexts/TaskContext.tsx`.
+    *   Verify the `runTransaction` logic that creates the `taskCompletions` document.
+    *   **Add Robust Logging:** Add `console.log` at every step: "Start Task Clicked", "Transaction Started", "Document Created with ID: X", "Transaction Failed: [Error]".
+    *   **Error Handling:** Ensure that if the DB write fails, the user is NOT redirected to the offer URL. Show an error alert instead.
+
+2.  **Verify Task Type Inference:**
+    *   Check `/workspace/src/lib/taskType.ts`.
+    *   Ensure `inferTaskType()` correctly identifies Locker tasks (which have `sourceType: "locker"`) as `"platform"` tasks. If it returns `"manual"` or `undefined`, the tracking logic might be skipped.
+
+3.  **Check ID Matching Logic:**
+    *   Verify that the Document ID generated on the client (`${userId}_${taskId}`) matches EXACTLY what the Postback Parser expects.
+    *   Check `/workspace/server/postback/parser.ts` and `/workspace/server/postback/engine.ts`. Ensure the parser correctly extracts the `sub_id` (or custom macro) from the OGAds postback and reconstructs the same `${userId}_${taskId}` string.
+
+4.  **Create a Debug Tool:**
+    *   Create a temporary endpoint `/api/debug-flow` that simulates the entire process:
+        *   Simulates a "Start Task" click for a test user.
+        *   Verifies the Firestore document exists.
+        *   Simulates a Postback request for that specific task.
+        *   Reports exactly where the link breaks (e.g., "Doc missing", "ID mismatch", "Parser failed").
+
+5.  **Fix & Test:**
+    *   Apply fixes to ensure the `taskCompletions` document is *always* created before redirection.
+    *   Ensure the Postback engine can successfully find and update this document.
+
+**Constraint:** Do not change the business logic of how payouts are calculated, only fix the tracking reliability and data consistency. Use TypeScript.

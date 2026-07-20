@@ -288,33 +288,28 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     // Atomic check-and-create: if the document already exists (any status),
     // leave it untouched — the user may have already confirmed or the
     // postback may have already arrived. Never overwrite a further-along state.
-    console.log("[startTask] runTransaction START", {
-      op: "runTransaction",
-      path: `taskCompletions/${docId}`,
-      targetStatus: "started",
-    });
-    try {
+    // Retry helper — Firestore transactions can fail on transient network errors.
+    // Retry up to 3 times with short exponential back-off before giving up.
+    async function attemptTransaction(attempt: number): Promise<void> {
+      console.log(`[startTask] runTransaction attempt ${attempt}`, {
+        path: `taskCompletions/${docId}`,
+      });
       await runTransaction(db, async (tx) => {
-        console.log("[startTask] tx.get", { op: "get", path: `taskCompletions/${docId}` });
         let snap: Awaited<ReturnType<typeof tx.get>>;
         try {
           snap = await tx.get(completionRef);
         } catch (e: unknown) {
-          const err = e as { code?: string; message?: string; stack?: string };
-          console.error("[startTask] tx.get FAILED", { code: err.code, message: err.message, stack: err.stack });
+          const err = e as { code?: string; message?: string };
+          console.error(`[startTask] tx.get FAILED (attempt ${attempt})`, { code: err.code, message: err.message });
           throw e;
         }
+
         if (snap.exists()) {
           console.log("[startTask] tx.get found existing doc — no-op", { currentStatus: snap.data()?.status });
           return;
         }
 
-        console.log("[startTask] tx.set", {
-          op: "set",
-          path: `taskCompletions/${docId}`,
-          currentStatus: "(none — new doc)",
-          targetStatus: "started",
-        });
+        console.log("[startTask] tx.set — creating started doc", { path: `taskCompletions/${docId}` });
         tx.set(completionRef, {
           taskId,
           userId: user.uid,
@@ -327,15 +322,37 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
           taskDescription: taskData.description || "",
           taskType,
           taskPlatform: taskData.platform,
+          platformId: taskData.platformId ?? null,
+          importedFrom: (taskData as Record<string, unknown>).importedFrom ?? null,
+          sourceType: (taskData as Record<string, unknown>).sourceType ?? null,
           manualAdminRate: taskData.manualAdminRate ?? null,
           manualUserSharePercent: taskData.manualUserSharePercent ?? null,
         });
       });
-      console.log("[startTask] runTransaction DONE — doc created/found at", `taskCompletions/${docId}`);
-    } catch (e: unknown) {
-      const err = e as { code?: string; message?: string; stack?: string };
-      console.error("[startTask] runTransaction FAILED", { code: err.code, message: err.message, stack: err.stack });
-      throw e;
+    }
+
+    const MAX_ATTEMPTS = 3;
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        await attemptTransaction(attempt);
+        console.log("[startTask] ✅ runTransaction DONE — doc written at", `taskCompletions/${docId}`);
+        lastErr = null;
+        break;
+      } catch (e: unknown) {
+        lastErr = e;
+        const err = e as { code?: string; message?: string };
+        console.error(`[startTask] attempt ${attempt}/${MAX_ATTEMPTS} FAILED`, { code: err.code, message: err.message });
+        if (attempt < MAX_ATTEMPTS) {
+          // Exponential back-off: 400 ms, 800 ms
+          await new Promise<void>((res) => setTimeout(res, 400 * attempt));
+        }
+      }
+    }
+    if (lastErr) {
+      const err = lastErr as { code?: string; message?: string; stack?: string };
+      console.error("[startTask] ALL attempts failed — tracking doc NOT created", { code: err.code, message: err.message });
+      throw lastErr;
     }
 
     // pendingBalance is NOT incremented here — only when the user confirms.

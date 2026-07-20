@@ -183,13 +183,22 @@ export default function TasksPage() {
     setOpenedTasks(next);
     saveOpenedTasks(next);
 
-    // Create the TaskCompletion record with status `started` in the background
+    // Create the TaskCompletion record with status `started`.
+    // This MUST succeed for the postback to be credited — surface any failure to the user.
     setStarting(taskId);
     try {
       await startTask(taskId);
+      console.log("[GTO] startTask succeeded — tracking doc created for", taskId);
     } catch (e: unknown) {
-      // Non-fatal — user can still click "Completed Task" via the localStorage fallback
-      console.warn("[GTO] startTask failed (non-fatal):", e);
+      // Tracking registration failed — warn the user so they know to contact support
+      // if their reward does not appear. The offer URL is already open in another tab.
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("[GTO] startTask FAILED — tracking doc NOT created:", e);
+      toast({
+        title: "⚠️ Tracking Registration Failed",
+        description: `Your task visit was NOT recorded: ${msg}. Complete the offer anyway — contact support if your reward doesn't appear.`,
+        variant: "destructive",
+      });
     } finally {
       setStarting(null);
     }
