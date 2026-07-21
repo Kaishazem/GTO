@@ -282,7 +282,8 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
       platformUserSharePercent: settings.platformTaskUserSharePercent,
     });
 
-    const docId = completionDocId(user.uid, taskId);
+    const uid = user.uid; // capture before nested async functions lose TS narrowing
+    const docId = completionDocId(uid, taskId);
     const completionRef = doc(db, "taskCompletions", docId);
 
     // Atomic check-and-create: if the document already exists (any status),
@@ -305,14 +306,14 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
         }
 
         if (snap.exists()) {
-          console.log("[startTask] tx.get found existing doc — no-op", { currentStatus: snap.data()?.status });
+          console.log("[startTask] tx.get found existing doc — no-op", { currentStatus: (snap.data() as Record<string, unknown>)?.status });
           return;
         }
 
         console.log("[startTask] tx.set — creating started doc", { path: `taskCompletions/${docId}` });
         tx.set(completionRef, {
           taskId,
-          userId: user.uid,
+          userId: uid,
           startedAt: serverTimestamp(),
           completedAt: serverTimestamp(),
           reward: earned,
@@ -323,8 +324,8 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
           taskType,
           taskPlatform: taskData.platform,
           platformId: taskData.platformId ?? null,
-          importedFrom: (taskData as Record<string, unknown>).importedFrom ?? null,
-          sourceType: (taskData as Record<string, unknown>).sourceType ?? null,
+          importedFrom: (taskData as unknown as Record<string, unknown>).importedFrom ?? null,
+          sourceType: (taskData as unknown as Record<string, unknown>).sourceType ?? null,
           manualAdminRate: taskData.manualAdminRate ?? null,
           manualUserSharePercent: taskData.manualUserSharePercent ?? null,
         });
@@ -397,7 +398,7 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
       completionSnap = await getDoc(completionRef);
       console.log("[completeTask] getDoc result", {
         exists: completionSnap.exists(),
-        currentStatus: completionSnap.exists() ? completionSnap.data()?.status : "(doc does not exist)",
+        currentStatus: completionSnap.exists() ? (completionSnap.data() as Record<string, unknown>)?.status : "(doc does not exist)",
       });
     } catch (e: unknown) {
       const err = e as { code?: string; message?: string; stack?: string };
@@ -411,8 +412,9 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     }
 
     if (completionSnap.exists()) {
-      const currentStatus = completionSnap.data().status as TaskCompletionStatus;
-      const earned = Number(completionSnap.data().reward) || 0;
+      const snapData = completionSnap.data() as Record<string, unknown>;
+      const currentStatus = snapData.status as TaskCompletionStatus;
+      const earned = Number(snapData.reward) || 0;
 
       if (currentStatus === "user_confirmed" || currentStatus === "platform_approved" || currentStatus === "approved") {
         throw new Error("You have already submitted this task");
@@ -452,7 +454,8 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
           }
           if (!fresh.exists()) throw new Error("Task completion not found");
 
-          const freshStatus = fresh.data().status as TaskCompletionStatus;
+          const freshData = fresh.data() as Record<string, unknown>;
+          const freshStatus = freshData.status as TaskCompletionStatus;
           console.log("[completeTask] tx.get result", { freshStatus });
 
           if (freshStatus === "user_confirmed" || freshStatus === "platform_approved" || freshStatus === "approved") {
@@ -523,7 +526,7 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
         empty: legacySnap.empty,
         count: legacySnap.docs.length,
         firstDocId: legacySnap.empty ? "(none)" : legacySnap.docs[0].id,
-        firstDocStatus: legacySnap.empty ? "(none)" : legacySnap.docs[0].data()?.status,
+        firstDocStatus: legacySnap.empty ? "(none)" : (legacySnap.docs[0].data() as Record<string, unknown>)?.status,
       });
     } catch (e: unknown) {
       const err = e as { code?: string; message?: string; stack?: string };
@@ -537,8 +540,9 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
 
     if (!legacySnap.empty) {
       const legacyDoc = legacySnap.docs[0];
-      const currentStatus = legacyDoc.data().status as TaskCompletionStatus;
-      const earned = Number(legacyDoc.data().reward) || 0;
+      const legacyData = legacyDoc.data() as Record<string, unknown>;
+      const currentStatus = legacyData.status as TaskCompletionStatus;
+      const earned = Number(legacyData.reward) || 0;
 
       if (currentStatus === "user_confirmed" || currentStatus === "platform_approved" || currentStatus === "approved") {
         throw new Error("You have already submitted this task");
@@ -567,7 +571,7 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
             targetStatus: newStatus,
           });
           tx.set(completionRef, {
-            ...legacyDoc.data(),
+            ...(legacyDoc.data() as Record<string, unknown>),
             status: newStatus,
             completedAt: serverTimestamp(),
             userConfirmedAt: serverTimestamp(),
@@ -658,7 +662,8 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
         }
 
         if (fresh.exists()) {
-          const freshStatus = fresh.data().status as TaskCompletionStatus;
+          const freshConcurrentData = fresh.data() as Record<string, unknown>;
+          const freshStatus = freshConcurrentData.status as TaskCompletionStatus;
           console.log("[completeTask] tx.get: doc appeared concurrently", { freshStatus });
           if (freshStatus === "user_confirmed" || freshStatus === "platform_approved" || freshStatus === "approved") {
             throw new Error("You have already submitted this task");
@@ -666,7 +671,7 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
           if (freshStatus === "rejected") {
             throw new Error("This task was rejected and cannot be resubmitted");
           }
-          const freshEarned = Number(fresh.data().reward) || earned;
+          const freshEarned = Number(freshConcurrentData.reward) || earned;
           const resolvedNew: TaskCompletionStatus =
             freshStatus === "postback_verified" ? "platform_approved" : "user_confirmed";
           console.log("[completeTask] tx.update (concurrent doc)", {

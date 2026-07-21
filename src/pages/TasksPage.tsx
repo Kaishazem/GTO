@@ -174,34 +174,47 @@ export default function TasksPage() {
     console.log('[GTO Start Task] 3. Final URL:', finalUrl);
     console.log('[GTO Start Task] ──────────────────────────────────────');
 
-    // Open the offer URL immediately — do not block on the Firestore write
-    window.open(finalUrl, "_blank");
+    // Open a blank tab SYNCHRONOUSLY within the user-gesture frame so browsers
+    // don't block it as an unsolicited popup. We navigate it to the real URL only
+    // after the tracking write confirms — that way the doc always exists before the
+    // user lands on the offer page, eliminating the `skipped_no_completion` race.
+    const tab = window.open("about:blank", "_blank");
 
-    // Optimistic UI: mark as opened in localStorage so button appears instantly
-    const next = new Set(openedTasks);
-    next.add(taskId);
-    setOpenedTasks(next);
-    saveOpenedTasks(next);
-
-    // Create the TaskCompletion record with status `started`.
-    // This MUST succeed for the postback to be credited — surface any failure to the user.
+    // Create the TaskCompletion record with status `started` before navigating.
     setStarting(taskId);
     try {
       await startTask(taskId);
       console.log("[GTO] startTask succeeded — tracking doc created for", taskId);
     } catch (e: unknown) {
-      // Tracking registration failed — warn the user so they know to contact support
-      // if their reward does not appear. The offer URL is already open in another tab.
       const msg = e instanceof Error ? e.message : String(e);
       console.error("[GTO] startTask FAILED — tracking doc NOT created:", e);
+      // Close the blank tab so we don't leave a zombie window open.
+      tab?.close();
       toast({
         title: "⚠️ Tracking Registration Failed",
-        description: `Your task visit was NOT recorded: ${msg}. Complete the offer anyway — contact support if your reward doesn't appear.`,
+        description: `Your task visit was NOT recorded: ${msg}. Please try again or contact support if the issue persists.`,
         variant: "destructive",
       });
+      setStarting(null);
+      return; // Abort — do not navigate without a confirmed tracking record
     } finally {
       setStarting(null);
     }
+
+    // Tracking doc confirmed — navigate the already-open tab to the offer URL.
+    if (tab) {
+      tab.location.href = finalUrl;
+    } else {
+      // Fallback: tab was blocked by the browser (e.g. popup blocker engaged mid-flow)
+      window.open(finalUrl, "_blank");
+    }
+
+    // Mark as opened in localStorage so the "Completed Task" button appears instantly
+    // without waiting for the Firestore onSnapshot to propagate back to the UI.
+    const next = new Set(openedTasks);
+    next.add(taskId);
+    setOpenedTasks(next);
+    saveOpenedTasks(next);
   }
 
   async function handleCompleteTask(taskId: string) {

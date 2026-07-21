@@ -83,6 +83,9 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
         conversionType: String(o.ctype ?? o.conversion_type ?? ""),
         platform:       "OGAds",
         platformId:     "ogads",
+        sourceType:     "locker",
+        importedFrom:   "ogads_locker",
+        taskType:       "platform",
       }))
       .filter((o) => o.externalId !== "");
 
