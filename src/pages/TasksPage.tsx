@@ -181,18 +181,19 @@ export default function TasksPage() {
     const tab = window.open("about:blank", "_blank");
 
     // Create the TaskCompletion record with status `started` before navigating.
+    console.log("[StartTask] Attempting to create tracking record for", taskId);
     setStarting(taskId);
     try {
       await startTask(taskId);
-      console.log("[GTO] startTask succeeded — tracking doc created for", taskId);
+      console.log("[StartTask] Success - Redirecting to offer URL", finalUrl);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      console.error("[GTO] startTask FAILED — tracking doc NOT created:", e);
+      console.error("[StartTask] Failed - Blocking redirect. Tracking doc NOT created:", msg);
       // Close the blank tab so we don't leave a zombie window open.
       tab?.close();
       toast({
-        title: "⚠️ Tracking Registration Failed",
-        description: `Your task visit was NOT recorded: ${msg}. Please try again or contact support if the issue persists.`,
+        title: "Unable to start task",
+        description: `We couldn't register your task visit: ${msg}. Please try again or contact support if the issue persists.`,
         variant: "destructive",
       });
       setStarting(null);
