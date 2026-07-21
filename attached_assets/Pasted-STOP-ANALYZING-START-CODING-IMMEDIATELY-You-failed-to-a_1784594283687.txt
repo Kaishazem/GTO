@@ -1,0 +1,71 @@
+STOP ANALYZING. START CODING IMMEDIATELY.
+
+You failed to apply the critical code changes for Task 1 and Task 2 in your previous run. The files still lack the required fixes. Do not explain, do not analyze further. Just edit the files exactly as specified below and commit.
+
+## 🛑 MANDATORY FIX 1: Update Import Files
+**Files:** `/workspace/api/import-locker.js` AND `/workspace/server/routes/import-locker.ts`
+
+**INSTRUCTION:**
+Open both files. Find the `.map()` function that returns the offer object.
+You MUST add these three lines to EVERY returned object inside the map.
+**DO NOT** change anything else. Just add these fields.
+
+**Code to INSERT inside the return object:**
+```javascript
+sourceType: "locker",
+importedFrom: "ogads_locker",
+taskType: "platform",                                                                  Example of how the return object must look:
+           return {
+  externalId: String(o.offerid),
+  title: String(o.name),
+  // ... other existing fields ...
+  sourceType: "locker",        // <--- ADD THIS LINE
+  importedFrom: "ogads_locker", // <--- ADD THIS LINE
+  taskType: "platform"          // <--- ADD THIS LINE
+};                                                                                                Action: Apply this to BOTH files (api/import-locker.js and server/routes/import-locker.ts) NOW.                                               MANDATORY FIX 2: Refactor TasksPage.tsx
+File: /workspace/src/pages/TasksPage.tsx
+INSTRUCTION:
+Find the handleStart function.
+The current logic opens the window BEFORE awaiting startTask(). THIS IS WRONG.
+REPLACE the entire body of handleStart with this exact logic structure:                                                                                             
+           async function handleStart(taskId: string, url: string, platformId?: string) {
+  const finalUrl = buildOfferUrl(taskId, url, platformId);
+  
+  setStarting(taskId);
+  
+  try {
+    // 1. FIRST: Create tracking record in Firestore
+    console.log("[StartTask] Attempting to create record for:", taskId);
+    await startTask(taskId); 
+    console.log("[StartTask] Success - Record created.");
+
+    // 2. ONLY THEN: Open the offer URL
+    window.open(finalUrl, "_blank");
+    
+    // 3. Update UI state
+    const next = new Set(openedTasks);
+    next.add(taskId);
+    setOpenedTasks(next);
+    saveOpenedTasks(next);
+    
+    toast({ title: "Task Started", description: "Complete the offer to earn rewards" });
+    
+  } catch (error) {
+    // 4. IF FAILED: BLOCK REDIRECT
+    console.error("[StartTask] FAILED - Blocking redirect:", error);
+    toast({ 
+      title: "❌ Unable to Start Task", 
+      description: "Tracking system unavailable. Please try again.",
+      variant: "destructive"
+    });
+    // DO NOT open window here!
+  } finally {
+    setStarting(null);
+  }
+}                                                                                                            Action: Replace your current handleStart function with the logic above immediately.
+✅ VERIFICATION & COMMIT
+Verify /workspace/api/import-locker.js contains sourceType: "locker".
+Verify /workspace/server/routes/import-locker.ts contains sourceType: "locker".
+Verify /workspace/src/pages/TasksPage.tsx awaits startTask() BEFORE window.open().
+COMMIT these changes with message: "fix: enforce locker metadata and strict start-task ordering".
+EXECUTE NOW. DO NOT ASK QUESTIONS
