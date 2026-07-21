@@ -6,6 +6,7 @@ import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { TaskProvider } from "@/contexts/TaskContext";
 import { WalletProvider } from "@/contexts/WalletContext";
 import { NotificationProvider } from "@/contexts/NotificationContext";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import Layout from "@/components/Layout";
 import LoginPage from "@/pages/LoginPage";
 import RegisterPage from "@/pages/RegisterPage";
@@ -18,7 +19,15 @@ import ProfilePage from "@/pages/ProfilePage";
 import NotFound from "@/pages/not-found";
 import { Loader2, ShieldX } from "lucide-react";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      // Prevent unhandled promise rejections from surfacing as WSOD
+      throwOnError: false,
+      retry: 1,
+    },
+  },
+});
 
 function BannedScreen() {
   const { banReason } = useAuth();
@@ -31,7 +40,8 @@ function BannedScreen() {
         <div>
           <h1 className="text-2xl font-bold text-white">Account Banned</h1>
           <p className="text-white/70 text-sm mt-3 leading-relaxed font-medium">
-            {banReason || "This account has been permanently banned from Green Task Orbit due to a violation of our terms of service."}
+            {banReason ||
+              "This account has been permanently banned from Green Task Orbit due to a violation of our terms of service."}
           </p>
           <p className="text-white/30 text-xs mt-4">
             If you believe this is an error, contact support.
@@ -42,7 +52,13 @@ function BannedScreen() {
   );
 }
 
-function ProtectedRoute({ component: Component, adminOnly = false }: { component: React.ComponentType; adminOnly?: boolean }) {
+function ProtectedRoute({
+  component: Component,
+  adminOnly = false,
+}: {
+  component: React.ComponentType;
+  adminOnly?: boolean;
+}) {
   const { user, profile, loading, deviceBanned } = useAuth();
 
   if (deviceBanned) return <BannedScreen />;
@@ -60,7 +76,9 @@ function ProtectedRoute({ component: Component, adminOnly = false }: { component
 
   return (
     <Layout>
-      <Component />
+      <ErrorBoundary section={Component.displayName ?? Component.name}>
+        <Component />
+      </ErrorBoundary>
     </Layout>
   );
 }
@@ -79,7 +97,11 @@ function PublicRoute({ component: Component }: { component: React.ComponentType 
   }
 
   if (user) return <Redirect to={profile?.role === "admin" ? "/admin" : "/dashboard"} />;
-  return <Component />;
+  return (
+    <ErrorBoundary section={Component.displayName ?? Component.name}>
+      <Component />
+    </ErrorBoundary>
+  );
 }
 
 function UserOnlyRoute({ component: Component }: { component: React.ComponentType }) {
@@ -100,7 +122,9 @@ function UserOnlyRoute({ component: Component }: { component: React.ComponentTyp
 
   return (
     <Layout>
-      <Component />
+      <ErrorBoundary section={Component.displayName ?? Component.name}>
+        <Component />
+      </ErrorBoundary>
     </Layout>
   );
 }
@@ -133,7 +157,10 @@ function AppRoutes() {
       <Route path="/wallet" component={() => <UserOnlyRoute component={WalletPage} />} />
       <Route path="/profile" component={() => <ProtectedRoute component={ProfilePage} />} />
       <Route path="/admin" component={() => <ProtectedRoute component={AdminPage} adminOnly />} />
-      <Route path="/admin/users" component={() => <ProtectedRoute component={AdminUsersPage} adminOnly />} />
+      <Route
+        path="/admin/users"
+        component={() => <ProtectedRoute component={AdminUsersPage} adminOnly />}
+      />
       <Route component={NotFound} />
     </Switch>
   );
@@ -143,18 +170,26 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <AuthProvider>
-          <TaskProvider>
-            <WalletProvider>
-              <NotificationProvider>
-                <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-                  <AppRoutes />
-                </WouterRouter>
-                <Toaster />
-              </NotificationProvider>
-            </WalletProvider>
-          </TaskProvider>
-        </AuthProvider>
+        <ErrorBoundary section="Auth">
+          <AuthProvider>
+            <ErrorBoundary section="Tasks">
+              <TaskProvider>
+                <ErrorBoundary section="Wallet">
+                  <WalletProvider>
+                    <ErrorBoundary section="Notifications">
+                      <NotificationProvider>
+                        <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+                          <AppRoutes />
+                        </WouterRouter>
+                        <Toaster />
+                      </NotificationProvider>
+                    </ErrorBoundary>
+                  </WalletProvider>
+                </ErrorBoundary>
+              </TaskProvider>
+            </ErrorBoundary>
+          </AuthProvider>
+        </ErrorBoundary>
       </TooltipProvider>
     </QueryClientProvider>
   );

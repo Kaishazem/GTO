@@ -1,5 +1,9 @@
 import { initializeApp } from "firebase/app";
-import { getFirestore, enableIndexedDbPersistence } from "firebase/firestore";
+import {
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+} from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 
 const firebaseConfig = {
@@ -14,24 +18,21 @@ const firebaseConfig = {
 if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
   console.error(
     "[firebase] Missing VITE_FIREBASE_* environment variables. " +
-    "Add them to Replit Secrets and restart the server."
+      "Add them to Replit Secrets and restart the server.",
   );
 }
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db = getFirestore(app);
 
-// enableIndexedDbPersistence can fail in multi-tab or restricted environments
-// (e.g. Replit preview iframes). Catch and ignore — app still works without it.
-enableIndexedDbPersistence(db).catch((err: { code?: string }) => {
-  if (err.code === "failed-precondition") {
-    console.warn("[firebase] IndexedDB persistence disabled: multiple tabs open.");
-  } else if (err.code === "unimplemented") {
-    console.warn("[firebase] IndexedDB persistence not supported in this browser.");
-  } else {
-    console.warn("[firebase] IndexedDB persistence error:", err);
-  }
+// Use the modern localCache API (replaces deprecated enableIndexedDbPersistence).
+// persistentMultipleTabManager keeps offline support working across tabs.
+// In restricted environments (Replit preview iframes, private browsing) the SDK
+// automatically falls back to memory-only cache — no throw, no WSOD.
+export const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({
+    tabManager: persistentMultipleTabManager(),
+  }),
 });
 
 export default app;
