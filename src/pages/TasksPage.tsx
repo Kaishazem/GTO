@@ -1,4 +1,15 @@
 import { useState, useEffect } from "react";
+import {
+  collection,
+  getDocs,
+  doc,
+  runTransaction,
+  serverTimestamp,
+  Timestamp,
+  query,
+  where,
+} from "firebase/firestore";
+import { db } from "@/lib/firebase";
 import { useTask, Task, TaskCompletionStatus } from "@/contexts/TaskContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { formatCurrency, formatDate, userReward } from "@/lib/utils";
@@ -32,10 +43,24 @@ import {
   ShieldCheck,
   XCircle,
   Link,
+  Lock,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type MainTab = "all" | "simple" | "premium" | "history";
+
+// ── Locker types ───────────────────────────────────────────────────────────────
+interface Locker {
+  id: string;
+  name: string;
+  type: string;
+  lockerId?: string;
+  directUrl: string;
+  embedCode?: string;
+  notes?: string;
+  active: boolean;
+  createdAt: Date;
+}
 type ActivityFilter = "all" | "pending" | "approved" | "rejected";
 
 const OPENED_TASKS_KEY = "gto_opened_tasks";
@@ -51,6 +76,22 @@ function loadOpenedTasks(): Set<string> {
 function saveOpenedTasks(set: Set<string>) {
   try {
     localStorage.setItem(OPENED_TASKS_KEY, JSON.stringify([...set]));
+  } catch {}
+}
+
+const OPENED_LOCKERS_KEY = "gto_opened_lockers";
+
+function loadOpenedLockers(): Set<string> {
+  try {
+    const raw = localStorage.getItem(OPENED_LOCKERS_KEY);
+    if (raw) return new Set(JSON.parse(raw) as string[]);
+  } catch {}
+  return new Set();
+}
+
+function saveOpenedLockers(set: Set<string>) {
+  try {
+    localStorage.setItem(OPENED_LOCKERS_KEY, JSON.stringify([...set]));
   } catch {}
 }
 
@@ -123,9 +164,51 @@ export default function TasksPage() {
   const [detailsTask, setDetailsTask] = useState<Task | null>(null);
   const [platformUserSharePercent, setPlatformUserSharePercent] = useState(65);
 
+  // ── Content Lockers state ─────────────────────────────────────────────────
+  const [lockers, setLockers] = useState<Locker[]>([]);
+  const [loadingLockers, setLoadingLockers] = useState(false);
+  const [lockersError, setLockersError] = useState<string | null>(null);
+  const [startingLocker, setStartingLocker] = useState<string | null>(null);
+  const [completingLocker, setCompletingLocker] = useState<string | null>(null);
+  const [openedLockers, setOpenedLockers] = useState<Set<string>>(loadOpenedLockers);
+
   useEffect(() => {
     getSettings().then((s) => setPlatformUserSharePercent(s.platformTaskUserSharePercent ?? 65));
   }, []);
+
+  // Fetch active lockers from Firestore
+  useEffect(() => {
+    if (!profile) return;
+    setLoadingLockers(true);
+    setLockersError(null);
+    getDocs(
+      query(collection(db, "lockers"), where("active", "==", true))
+    )
+      .then((snap) => {
+        const fetched: Locker[] = snap.docs.map((d) => {
+          const data = d.data();
+          return {
+            id: d.id,
+            name: data.name ?? "",
+            type: data.type ?? "",
+            lockerId: data.lockerId ?? undefined,
+            directUrl: data.directUrl ?? "",
+            embedCode: data.embedCode ?? undefined,
+            notes: data.notes ?? undefined,
+            active: data.active ?? true,
+            createdAt: (data.createdAt as Timestamp)?.toDate() ?? new Date(),
+          };
+        });
+        // Sort newest first
+        fetched.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+        setLockers(fetched);
+      })
+      .catch((e: unknown) => {
+        console.error("[TasksPage] Failed to fetch lockers:", e);
+        setLockersError("Failed to load content lockers.");
+      })
+      .finally(() => setLoadingLockers(false));
+  }, [profile]);
 
   // Tasks with status `started` are still in-progress from the user's perspective —
   // they remain in the task list so the user can click "Completed Task".
@@ -216,6 +299,98 @@ export default function TasksPage() {
     next.add(taskId);
     setOpenedTasks(next);
     saveOpenedTasks(next);
+  }
+
+  // ── Locker start handler ───────────────────────────────────────────────────
+  // Stable task identifier: the locker's Firestore doc ID.
+  // This same value is stored as taskId in taskCompletions AND passed as aff_sub2
+  // in the click URL so the existing postback engine can match them.
+  async function handleStartLocker(locker: Locker) {
+    const uid = profile?.uid ?? "";
+    if (!uid) {
+      toast({ title: "Not logged in", variant: "destructive" });
+      return;
+    }
+    if (!locker.directUrl) {
+      toast({ title: "No URL configured for this locker", variant: "destructive" });
+      return;
+    }
+
+    // taskId = the locker Firestore doc ID (stable, unique per locker)
+    const taskId = locker.id;
+    // Build tracking URL using OGAds strategy: aff_sub=userId, aff_sub2=taskId
+    const finalUrl = buildTrackingUrl(locker.directUrl, taskId, uid, "ogads");
+
+    // Open blank tab synchronously inside the user-gesture frame
+    const newTab = window.open("about:blank", "_blank");
+
+    setStartingLocker(locker.id);
+    try {
+      const docId = `${uid}_${taskId}`;
+      const completionRef = doc(db, "taskCompletions", docId);
+      await runTransaction(db, async (tx) => {
+        const snap = await tx.get(completionRef);
+        if (snap.exists()) return; // already started — do not overwrite
+        tx.set(completionRef, {
+          taskId,
+          userId: uid,
+          startedAt: serverTimestamp(),
+          completedAt: serverTimestamp(),
+          reward: 0,
+          adminReward: 0,
+          status: "started" satisfies TaskCompletionStatus,
+          taskTitle: locker.name,
+          taskDescription: `Content Locker — ${locker.type}`,
+          taskType: "platform",
+          taskPlatform: "ogads",
+          platformId: "ogads",
+          importedFrom: "ogads",
+          sourceType: "locker",
+          manualAdminRate: null,
+          manualUserSharePercent: null,
+        });
+      });
+    } catch (e: unknown) {
+      newTab?.close();
+      toast({
+        title: "Unable to start locker",
+        description: e instanceof Error ? e.message : "Please try again.",
+        variant: "destructive",
+      });
+      setStartingLocker(null);
+      return;
+    } finally {
+      setStartingLocker(null);
+    }
+
+    if (newTab) {
+      newTab.location.href = finalUrl;
+    } else {
+      window.open(finalUrl, "_blank");
+    }
+
+    const next = new Set(openedLockers);
+    next.add(locker.id);
+    setOpenedLockers(next);
+    saveOpenedLockers(next);
+  }
+
+  async function handleCompleteLocker(lockerId: string) {
+    setCompletingLocker(lockerId);
+    try {
+      // completeTask works because the completion doc already exists (started state)
+      // and it reads from taskCompletions/{uid_lockerId}, not from tasks collection.
+      await completeTask(lockerId);
+      const next = new Set(openedLockers);
+      next.delete(lockerId);
+      setOpenedLockers(next);
+      saveOpenedLockers(next);
+      toast({ title: "✅ Done!", description: "Locker task submitted — pending verification" });
+    } catch (e: unknown) {
+      toast({ title: "Error", description: e instanceof Error ? e.message : "Something went wrong", variant: "destructive" });
+    } finally {
+      setCompletingLocker(null);
+    }
   }
 
   async function handleCompleteTask(taskId: string) {
@@ -452,6 +627,141 @@ export default function TasksPage() {
             </>
           )}
         </>
+      )}
+
+      {/* ── CONTENT LOCKERS SECTION ── */}
+      {tab !== "history" && (
+        <div className="space-y-4">
+          <div className="flex items-center gap-2">
+            <Lock className="w-4 h-4 text-violet-400" />
+            <h2 className="text-lg font-bold text-white">Content Lockers</h2>
+            <span className="text-xs text-white/40 ml-1">OGAds</span>
+          </div>
+          <p className="text-sm text-white/40 -mt-2">
+            Complete a content locker to earn a reward — payout is confirmed after the advertiser verifies your conversion.
+          </p>
+
+          {loadingLockers ? (
+            <div className="flex justify-center py-8">
+              <Loader2 className="w-6 h-6 animate-spin text-violet-400" />
+            </div>
+          ) : lockersError ? (
+            <div className="text-center py-8 text-red-400 text-sm">{lockersError}</div>
+          ) : lockers.length === 0 ? (
+            <div className="border border-white/10 bg-white/5 rounded-2xl p-8 text-center">
+              <div className="w-14 h-14 mx-auto mb-3 rounded-2xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center">
+                <Lock className="w-7 h-7 text-violet-400" />
+              </div>
+              <p className="text-white/40 text-sm">No active content lockers yet</p>
+              <p className="text-white/25 text-xs mt-1">Check back soon</p>
+            </div>
+          ) : (
+            <div className="grid gap-4">
+              {lockers.map((locker) => {
+                const lockerCompletion = completions.find((c) => c.taskId === locker.id);
+                const lockerStatus = lockerCompletion?.status as TaskCompletionStatus | undefined;
+                // postback_verified is not "done" — user still needs to click "Completed Task"
+                const isLockerDone = !!lockerStatus && lockerStatus !== "started" && lockerStatus !== "postback_verified";
+                const isLockerStarting = startingLocker === locker.id;
+                const isLockerCompleting = completingLocker === locker.id;
+                const isLockerOpened = openedLockers.has(locker.id);
+                const lockerCanConfirm =
+                  isLockerOpened ||
+                  lockerStatus === "started" ||
+                  lockerStatus === "postback_verified";
+                const lockerStatusProps = lockerStatus ? statusBadgeProps(lockerStatus) : null;
+                const hasUrl = !!locker.directUrl;
+
+                return (
+                  <div
+                    key={locker.id}
+                    className={cn(
+                      "border rounded-2xl p-5 transition-all",
+                      isLockerDone
+                        ? "border-violet-500/30 bg-violet-500/5 opacity-80"
+                        : "border-white/10 bg-white/5 hover:border-violet-500/30"
+                    )}
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-2 flex-wrap">
+                          <Badge className="bg-violet-500/20 text-violet-300 border-violet-500/30 text-xs">
+                            <Lock className="w-3 h-3 mr-1" />
+                            Content Locker
+                          </Badge>
+                          {locker.type && (
+                            <Badge className="bg-white/10 text-white/60 border-white/10 text-xs capitalize">
+                              {locker.type}
+                            </Badge>
+                          )}
+                          {lockerStatus && lockerStatusProps && (
+                            <Badge className={cn("text-xs border flex items-center", lockerStatusProps.className)}>
+                              {lockerStatusProps.icon}{lockerStatusProps.label}
+                            </Badge>
+                          )}
+                        </div>
+                        <h3 className="font-semibold text-white text-base mb-1">{locker.name}</h3>
+                        {lockerStatus === "postback_verified" && (
+                          <p className="text-xs text-sky-400 mt-1 font-medium">
+                            ✔ Platform verified — click "Completed Task" to claim your reward
+                          </p>
+                        )}
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <div className="text-sm font-semibold text-violet-300">Reward on completion</div>
+                        <div className="text-xs text-white/30 mt-0.5">via postback</div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between mt-4 pt-4 border-t border-white/5">
+                      {isLockerDone ? (
+                        <div className="flex items-center gap-2 text-violet-400 text-sm font-medium">
+                          <CheckCircle className="w-4 h-4" />
+                          Submitted
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <Button
+                            size="sm"
+                            disabled={isLockerStarting || isLockerCompleting || !hasUrl}
+                            onClick={() => handleStartLocker(locker)}
+                            className="bg-violet-600 hover:bg-violet-500 text-white rounded-xl disabled:opacity-50"
+                          >
+                            {isLockerStarting ? (
+                              <><Loader2 className="w-4 h-4 animate-spin mr-1" />Opening...</>
+                            ) : (
+                              <><ExternalLink className="w-4 h-4 mr-1" />{hasUrl ? "Start" : "No URL"}</>
+                            )}
+                          </Button>
+
+                          {lockerCanConfirm && (
+                            <Button
+                              size="sm"
+                              disabled={isLockerCompleting}
+                              onClick={() => handleCompleteLocker(locker.id)}
+                              className={cn(
+                                "text-white rounded-xl",
+                                lockerStatus === "postback_verified"
+                                  ? "bg-sky-600 hover:bg-sky-500"
+                                  : "bg-blue-600 hover:bg-blue-500"
+                              )}
+                            >
+                              {isLockerCompleting ? (
+                                <><Loader2 className="w-4 h-4 animate-spin mr-1" />Submitting...</>
+                              ) : (
+                                <><CheckCircle className="w-4 h-4 mr-1" />Completed Task</>
+                              )}
+                            </Button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       )}
 
       {/* ── TASK DETAILS DIALOG ── */}

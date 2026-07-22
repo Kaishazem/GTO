@@ -1,0 +1,65 @@
+You are working on the GTO (Green Task Orbit) project, branch: replit-latest.
+This task has TWO independent parts. You MUST complete PART 1 fully and print its deliverable BEFORE you start PART 2. This ordering is mandatory because credits are limited: if you run out mid-task, PART 1's output (the full rules file) must already exist in your report so the owner can publish it manually.
+
+Verified facts from a prior read-only audit (use them as hints, but RE-VERIFY line numbers against the current code — they may have shifted):
+- Lockers are stored in Firestore collection named exactly: lockers
+- AdminPage.tsx client-SDK calls (approx): read getDocs ~1423, create addDoc ~1463, update updateDoc ~1460/1494, delete deleteDoc ~1481 — all on collection "lockers".
+- A locker document's fields are: name, type, lockerId, directUrl, embedCode, notes, active, createdAt.
+- firestore.rules currently has a `match /lockers/{lockerId}` block (around lines 238-244) that says `allow read, write: if isAdmin();` — this is WRONG and is the cause of the red "Missing or insufficient permissions" toast.
+- src/pages/TasksPage.tsx currently contains ZERO references to lockers (confirmed by grep). Lockers are admin-only right now; users never see them.
+- The repo has NO .firebaserc and firebase-tools is NOT installed → rules are NEVER auto-deployed; the owner publishes them manually in Firebase Console. So you must NOT run any firebase CLI command.
+- Helper functions isSignedIn() and isAdmin() already exist at the top of firestore.rules.
+
+═══════════════════════════════════════════════════════════════════
+PART 1 — FIX THE LOCKERS FIRESTORE RULE (do this FIRST)
+═══════════════════════════════════════════════════════════════════
+Edit firestore.rules and REPLACE the existing `match /lockers/{lockerId}` block with this corrected block (keep every other block byte-identical):
+
+    // ── lockers/{lockerId} ─────────────────────────────────────────────
+    // Manual OGAds Content/URL locker configs.
+    // Signed-in users may read (so the Tasks page can render locker tasks).
+    // Only admins may create/update/delete.
+    match /lockers/{lockerId} {
+      allow read: if isSignedIn() && (resource == null || resource.data != null);
+      allow create, update, delete: if isAdmin();
+    }
+
+Then, IMMEDIATELY (before touching anything else, before starting PART 2), in your report, print the ENTIRE updated firestore.rules file inside ONE single fenced code block — every line, every block, byte-identical to disk. The owner will copy this whole block and paste it into Firebase Console → Firestore Database → Rules → Publish. Also state explicitly that editing the file is not enough and the owner must publish it manually, and that you did NOT run any firebase deploy.
+
+═══════════════════════════════════════════════════════════════════
+PART 2 — SHOW LOCKERS AS EXECUTABLE TASKS IN A DEDICATED SECTION
+═══════════════════════════════════════════════════════════════════
+Goal: signed-in (non-admin) users must see the active lockers as executable tasks, in their OWN dedicated list/section inside the Tasks page, clearly separated from the normal API-imported tasks.
+
+Requirements:
+1. In src/pages/TasksPage.tsx, fetch the `lockers` collection (client SDK, same `db` used elsewhere) and render ONLY lockers whose `active === true`. Inactive lockers must NOT appear to users.
+2. Render them in a DEDICATED, visually separate section/list (e.g. a clearly titled block like "Content Lockers" or a separate tab within the Tasks page — choose whatever matches the existing UI style best, but it MUST be visually distinct from the regular tasks list). Each locker becomes one task-like card.
+3. Each locker card should show at least: the locker `name` (Display Name), the locker type, and a primary action button (e.g. "Start" / "Open"). If `directUrl` is empty, disable the button. Do NOT require a fixed reward/payout on the card (lockers have no fixed payout in their config) — if the existing card component demands a reward field, show a neutral placeholder (e.g. "Reward on completion") or 0; the real payout arrives later via postback.
+4. START behaviour: when the user clicks the action button, open the locker `directUrl` in a new tab. Append tracking parameters to the URL so OGAds can attribute the conversion back to this user and this task: add `aff_sub=<current user uid>` and `aff_sub2=<a stable task identifier for this locker completion>` (and `platform=ogads` if consistent with how OGAds postbacks are detected in this repo). Use the SAME completion-creation mechanism the regular tasks use on Start (the async lifecycle: create a taskCompletions record with status "started" immediately, via the existing startTask-style logic / TaskContext), so that a later OGAds postback can settle it. The stable task identifier you put in aff_sub2 MUST equal the taskId you store in the taskCompletions record, so the existing postback engine (which matches by userId + taskId) can find it. Decide the cleanest stable identifier (e.g. the locker Firestore doc id, or "locker_<docId>", or the lockerId) and use it consistently in BOTH the URL param and the stored completion — document your choice in the report.
+5. Reuse existing components/helpers/styles as much as possible (buildTrackingUrl / PLATFORM_REGISTRY / TaskContext / existing card and modal components). Do not invent a parallel state system. Respect the existing async task lifecycle (started → user_confirmed / postback_verified → platform_approved → approved) — do not bypass it.
+6. If `embedCode` is present and non-empty, you MAY show it in a details/preview area, but do NOT build a complex in-page script-injection modal loader in this task — keep Start = open directUrl in a new tab. (embedCode is usually empty.)
+7. Handle loading and empty states (e.g. "No active lockers yet") and errors gracefully, matching the existing page style.
+
+IMPORTANT about postback attribution for lockers (read carefully, then document your decision in the report):
+- The OGAds postback parser/engine already maps aff_sub→userId and aff_sub2→taskId and detects OGAds. So if you pass aff_sub/aff_sub2/platform=ogads on the locker URL AND the OGAds locker is configured (in the OGAds dashboard, by the admin) to fire a postback that echoes those macros, the existing engine will settle the completion with no engine changes.
+- Therefore: do NOT modify the postback engine/parser/adapters for this task. Just make the URL params and the stored taskId consistent.
+- In your final report, add a short "ADMIN SETUP NOTE" explaining that, for locker conversions to actually pay out, the admin must set the OGAds locker's Postback URL (in the OGAds dashboard, per-locker settings) to the GTO postback endpoint including the macros aff_sub={aff_sub}&aff_sub2={aff_sub2}&offer_id={offer_id}&payout={payout}&password={password}&platform=ogads (or whatever macro syntax OGAds uses for lockers). This is an external dashboard step, not a code change — just document it clearly so the owner knows.
+
+═══════════════════════════════════════════════════════════════════
+CONSTRAINTS (apply to both parts)
+═══════════════════════════════════════════════════════════════════
+- Do NOT modify any other collection's rules. Do NOT touch the postback engine, parser, adapters, CPAGrip, the API offer-import pipeline (/api/import-platform), the locker import route (/api/import-locker), the wallet, or the task lifecycle logic.
+- Do NOT change the Admin lockers form/CRUD (it already works).
+- Do NOT refactor unrelated code. Keep edits minimal and focused.
+- Use the exact collection name `lockers`.
+- After finishing, run the type check / build and confirm zero TypeScript errors.
+
+═══════════════════════════════════════════════════════════════════
+FINAL REPORT (mandatory, in this order)
+═══════════════════════════════════════════════════════════════════
+1. The FULL updated firestore.rules file in one fenced code block (from PART 1) + the manual-publish reminder.
+2. List of files changed in PART 2 with a 1-2 line description each.
+3. The exact stable task-identifier scheme you chose for lockers and confirmation that the same value is used in aff_sub2 AND in the stored taskCompletions taskId.
+4. The "ADMIN SETUP NOTE" about configuring the OGAds locker postback URL (external step).
+5. Any limitation or assumption you made (e.g. reward shown as placeholder, embedCode not used for in-page locking).
+6. Confirmation that the type check / build passed with zero errors.
