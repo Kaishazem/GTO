@@ -235,5 +235,13 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // ── lockers/{lockerId} ─────────────────────────────────────────────────
+    // Manual OGAds locker configurations (Content Lockers / URL Lockers).
+    // Completely separate from the tasks collection — no user access.
+    // Only admins may read and write.
+    match /lockers/{lockerId} {
+      allow read, write: if isAdmin();
+    }
+
   }
 }
