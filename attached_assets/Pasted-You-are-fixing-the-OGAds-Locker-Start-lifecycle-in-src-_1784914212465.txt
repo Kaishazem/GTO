@@ -1,0 +1,32 @@
+You are fixing the OGAds Locker "Start" lifecycle in src/pages/TasksPage.tsx so that postbacks are matched. VERIFIED ROOT CAUSE (do not re-investigate): handleStartLocker (around line 1755) currently only calls window.open() + markLockerAsStarted() (localStorage at ~1695). It creates NO taskCompletions document. The doc is created lazily only in handleLockerComplete (~1792), which is the old async anti-pattern: a postback arriving before "Completed Task" finds nothing and the engine (server/postback/engine.ts findActiveCompletion, ~68-75, matches by userId+taskId with status 'started') returns "skipped" (confirmed live via curl: completionId:null).
+
+## Goal
+Make handleStartLocker create the taskCompletions record with status "started" IMMEDIATELY on Start, mirroring how NORMAL tasks do it (the startTask flow), so the postback has a record to settle.
+
+## Requirements
+1. In handleStartLocker, keep window.open() and markLockerAsStarted() exactly as they are (do NOT remove them — the localStorage flag is a harmless UI hint).
+2. ADD a Firestore write that creates the completion using the SAME safe pattern the normal startTask flow uses in this repo: a runTransaction (or getDoc-then-setDoc) that CREATES THE DOC ONLY IF IT DOES NOT ALREADY EXIST. This "create-only-if-absent" guard is MANDATORY — do NOT use a blind setDoc, otherwise a second Start click (the Start button is not hidden after start) could overwrite an already-advanced status like postback_verified/platform_approved back to "started" and lose a verified conversion. Reuse the existing startTask helper from TaskContext if it already does this; if handleStartLocker cannot call it cleanly, replicate its create-if-absent transaction locally.
+3. The stored fields must be:
+   - userId = auth.currentUser.uid
+   - taskId = the EXACT same string you append to the URL as aff_sub2 (this is the single most important invariant: aff_sub2 value === stored taskId === the taskId part of the deterministic doc id). Do not transform it.
+   - document id = `${userId}_${taskId}` (deterministic, via setDoc(doc(db,'taskCompletions', docId), ...) inside the create-if-absent guard)
+   - status = 'started'
+   - platformId = 'ogads'
+   - startedAt / createdAt = serverTimestamp()
+   - reward = 0, adminReward = 0 (payout is unknown until postback; the engine overwrites these on settlement)
+   - taskType / sourceType / any marker your normal tasks set for a locker, if needed to render it — match the normal task schema so the engine and the UI both understand it.
+4. Do NOT change the aff_sub2 generation logic. Do NOT modify handleLockerComplete (it may keep advancing status later; just ensure it no longer is the FIRST place the doc is created — after your fix the doc already exists, so handleLockerComplete should UPDATE it, not addDoc a duplicate; if it currently addDocs, change that addDoc to an update/setDoc on the same deterministic id so it cannot create a second doc).
+5. Ensure setDoc, doc, serverTimestamp, runTransaction, getDoc are imported from firebase/firestore as needed.
+
+## Constraints
+- Do NOT touch server/postback/engine.ts, api/postback.js, the parser, adapters, the Firestore rules, the admin locker form, or the API offer flow. The backend is correct; it only needs the doc to exist on Start.
+- Keep edits minimal and focused on handleStartLocker (and the duplicate-doc risk in handleLockerComplete noted in req 4).
+- Run the type check / build; confirm zero TypeScript errors.
+
+## Final report (mandatory)
+1. List files changed with a 1-2 line description each.
+2. Quote the exact line where taskId (== aff_sub2) is defined and confirm the same variable is used for the stored taskId and the doc id.
+3. Confirm you used create-only-if-absent (transaction or getDoc guard), NOT a blind setDoc, and explain in one line how a second Start click is now safe.
+4. Confirm handleLockerComplete no longer creates a duplicate doc (it updates the existing deterministic doc).
+5. Confirm the build passed with zero errors.
+6. State the exact verification the owner must run: click Start, copy the NEW aff_sub2 from the opened URL, then curl the Vercel postback endpoint with that new aff_sub2 (plus matching aff_sub = the user uid, offer_id=TEST, payout=0.8, platform=ogads, no password) and expect status "postback_verified" (because Completed Task was not clicked yet) with a non-null completionId.
