@@ -445,6 +445,35 @@ export async function processPostback(
 
   logParsed(parsed, meta.method, meta.fullUrl);
 
+  // ── MyLead post-parse corrections ────────────────────────────────────────
+  // Must run before deduplication so corrected convId builds the right dedupKey,
+  // and before settlement so corrected payout is used in reward calculations.
+  if (parsed.platformId === "mylead") {
+    // 1. Payout: prefer payout_decimal (USD float); else payout/100 (cents int).
+    const rawDecimal = parsed.rawParams.payout_decimal || "";
+    const rawCents   = parsed.rawParams.payout || "";
+    const pd    = parseFloat(rawDecimal);
+    const cents = parseFloat(rawCents);
+    console.log(`[mylead] payout raw=${rawCents} payout_decimal=${rawDecimal}`);
+    parsed.payout = (Number.isFinite(pd) && pd > 0) ? pd
+      : (Number.isFinite(cents) && cents > 0) ? cents / 100
+      : 0;
+    console.log(`[mylead] resolved_dollars=${parsed.payout}`);
+
+    // 2. convId fallback: program_config_id + '_' + ml_sub1 when transaction_id absent.
+    if (!parsed.convId) {
+      const pcid = parsed.rawParams.program_config_id || "";
+      const sub1 = parsed.rawParams.ml_sub1 || "";
+      if (pcid && sub1) parsed.convId = `${pcid}_${sub1}`;
+    }
+
+    // 3. Warn on unexpected/missing raw status.
+    const rawSt = (parsed.rawParams.status || "").toLowerCase().trim();
+    if (rawSt && !["approved", "pre_approved", "pending", "rejected"].includes(rawSt)) {
+      console.warn(`[mylead] unrecognised status="${rawSt}" — treating as approved`);
+    }
+  }
+
   // ── DB availability ──────────────────────────────────────────────────────
   if (!db) {
     console.warn("[engine] Firebase Admin not initialised — cannot process postback.");
@@ -516,6 +545,26 @@ export async function processPostback(
   const completion = parsed.userId && parsed.taskId
     ? await findActiveCompletion(parsed.userId, parsed.taskId)
     : null;
+
+  // ── MyLead pending: record-only, no settlement, no reward ────────────────
+  const myLeadRawStatus = (parsed.rawParams.status || "").toLowerCase().trim();
+  if (parsed.platformId === "mylead" && myLeadRawStatus === "pending") {
+    console.log("[mylead] pending conversion stored, awaiting approval");
+    await writeConversion(dedupKey, parsed, completion?.id ?? "", "pending_approval", Date.now() - startMs, receivedAt);
+    await writeLog("pending_approval", "MyLead pending conversion recorded — awaiting approval", parsed, completion?.id ?? "", Date.now() - startMs, receivedAt);
+    return {
+      ok: true,
+      status: "postback_stored",
+      completionId: completion?.id ?? null,
+      platformId: parsed.platformId,
+      userId: parsed.userId,
+      taskId: parsed.taskId,
+      payout: parsed.payout,
+      message: "MyLead pending conversion stored — awaiting approval postback",
+      processingMs: Date.now() - startMs,
+      parsed,
+    };
+  }
 
   // ── Approved postback ─────────────────────────────────────────────────────
   if (parsed.status === "approved") {

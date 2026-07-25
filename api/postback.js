@@ -146,6 +146,35 @@ export default async function handler(req, res) {
 
   // ── Universal parse ───────────────────────────────────────────────────────
   const parsed = parsePostback(rawParams);
+
+  // ── MyLead post-parse corrections ────────────────────────────────────────
+  // Must run before destructuring so corrected convId and payout propagate.
+  if (parsed.platformId === 'mylead') {
+    // 1. Payout: prefer payout_decimal (USD float); else payout/100 (cents int).
+    const rawDecimal = rawParams.payout_decimal || '';
+    const rawCents   = rawParams.payout || '';
+    const pd    = parseFloat(rawDecimal);
+    const cents = parseFloat(rawCents);
+    console.log(`[mylead] payout raw=${rawCents} payout_decimal=${rawDecimal}`);
+    parsed.payout = (Number.isFinite(pd) && pd > 0) ? pd
+      : (Number.isFinite(cents) && cents > 0) ? cents / 100
+      : 0;
+    console.log(`[mylead] resolved_dollars=${parsed.payout}`);
+
+    // 2. convId fallback: program_config_id + '_' + ml_sub1 when transaction_id absent.
+    if (!parsed.convId) {
+      const pcid = rawParams.program_config_id || '';
+      const sub1 = rawParams.ml_sub1 || '';
+      if (pcid && sub1) parsed.convId = `${pcid}_${sub1}`;
+    }
+
+    // 3. Warn on unexpected/missing raw status.
+    const rawSt = (rawParams.status || '').toLowerCase().trim();
+    if (rawSt && !['approved', 'pre_approved', 'pending', 'rejected'].includes(rawSt)) {
+      console.warn(`[mylead] unrecognised status="${rawSt}" — treating as approved`);
+    }
+  }
+
   const { platformId, displayName, userId, taskId, convId, payout, status } = parsed;
 
   const fullUrl = `${req.headers['x-forwarded-proto'] || 'https'}://${req.headers.host || ''}${req.url || ''}`;
@@ -222,6 +251,21 @@ export default async function handler(req, res) {
   }
 
   const processingMs = () => Date.now() - startTime;
+
+  // ── MyLead pending: record-only, no settlement, no reward ─────────────────
+  // parser.status is 'approved' even for 'pending' (unknown→approved default),
+  // so we check rawParams.status directly here.
+  const myLeadRawStatus = (rawParams.status || '').toLowerCase().trim();
+  if (platformId === 'mylead' && myLeadRawStatus === 'pending') {
+    console.log('[mylead] pending conversion stored, awaiting approval');
+    await writeConversion(db, dedupKey, parsed, completion?.id || '', 'pending_approval', processingMs(), receivedAt);
+    await writeLog(db, 'pending_approval', 'MyLead pending conversion recorded — awaiting approval', parsed, completion?.id || '', processingMs(), receivedAt);
+    return res.status(200).json({
+      received: true, status: 'postback_stored', platformId, userId, taskId,
+      completionId: completion?.id || null, payout, processingMs: processingMs(),
+      message: 'MyLead pending conversion stored — awaiting approval postback',
+    });
+  }
 
   // ── Approved postback ──────────────────────────────────────────────────────
   if (status === 'approved') {

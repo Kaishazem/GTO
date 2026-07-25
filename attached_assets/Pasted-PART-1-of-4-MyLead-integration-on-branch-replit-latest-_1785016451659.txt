@@ -1,0 +1,25 @@
+PART 1 of 4 — MyLead integration on branch replit-latest. You (Replit Agent) are the ONLY tool allowed to modify code. Start with `git pull origin replit-latest`. This part builds ONLY the server-side mylead postback adapter (no frontend yet). OGAds/Adscend must stay untouched.
+
+FIXED FACTS (ground truth from the publisher dashboard — do not re-derive):
+- MyLead CPA Locker id / embed id = 96783d6a-886e-11f1-8711-129a1c289511
+- We will inject ML_SUB1 = userId(uid), ML_SUB2 = taskId(= embed id) into the embed (frontend, later part). MyLead ECHOES them back as [ml_sub1]/[ml_sub2]. So in the postback: userId comes from ml_sub1, taskId comes from ml_sub2, and taskId on the (later) started doc will equal the embed id — keep this identity exact.
+- Postback macros: [transaction_id], [program_id], [program_name], [program_config_id], [payout] = CENTS (1.20 -> 120), [payout_decimal] = float (1.20), [status] = pending|approved|rejected|pre_approved, [currency]=EUR|USD, [country_code], [ml_sub1]..[ml_sub5].
+- platformId / taskPlatform to store & match = "mylead".
+
+STEP 0 — INSPECT & QUOTE:
+1. src/lib/platforms.ts: any existing "mylead" entry/trackingStrategy? quote it.
+2. api/_modules/postbackAdapters.js AND server/postback/engine.ts (TOPOLOGY DUPLICATED — keep BOTH in sync): existing mylead adapter? quote detection+extraction; if absent, add it.
+3. Quote how ogads/adscend adapters detect + extract + store platformId, so mylead mirrors them exactly.
+
+BUILD THE ADAPTER (both files, identical logic):
+- detection: paramEquals platform=mylead OR hasParam ml_sub1.
+- userId order: ['ml_sub1','subid1','subid','aff_sub'].
+- taskId order: ['ml_sub2','subid2','offer_id','campaign_id'].
+- convId/dedupKey: transaction_id (fallback program_config_id + '_' + ml_sub1).
+- PAYOUT (critical): prefer payout_decimal if finite>0; else payout/100; NEVER raw payout as dollars; console.log raw payout, payout_decimal, resolved dollars.
+- STATUS (critical): approved|pre_approved -> PAY (settlement path computing reward/adminReward); pending -> RECORD only, do NOT write reward, do NOT advance completion to paid, console.log "[mylead] pending conversion stored, awaiting approval"; rejected -> no-pay path (reward 0); missing/unknown -> fallback approved + warn. Always store raw [status] on the conversion record.
+- store platformId/taskPlatform = "mylead" on the completion so findActiveCompletion matches the (later) embed-created doc.
+
+CONSTRAINTS: do NOT touch frontend, rules, offer-import, reward-split formula, OGAds/Adscend. Run build / `npx tsc --noEmit` until ZERO errors (you MUST run it). Then: git add -A ; git commit -m "feat(mylead): add status-aware cents-aware postback adapter (part 1/4)" ; git push origin replit-latest.
+
+REPORT: (a) STEP0 findings quoted; (b) exact adapter lines in BOTH files incl. payout + status logic; (c) ACTUAL build command + zero errors; (d) commit hash + pushed. Stop here — do NOT start frontend.

@@ -173,6 +173,39 @@ export const ADAPTERS = [
       payout: ['payout', 'amount'],
     },
   },
+
+  // ── MyLead ─────────────────────────────────────────────────────────────────
+  // Tracking: ml_sub1=userId, ml_sub2=taskId (echoed from embed injection).
+  // Payout: payout_decimal (float USD) preferred; payout (integer cents) fallback.
+  //   Cents-to-dollar conversion and pending status are handled post-parse in
+  //   api/postback.js (rawParams inspection) because they require logic beyond
+  //   static statusMap/params config.
+  // Status: approved|pre_approved→PAY; pending→RECORD only; rejected→no-pay;
+  //   unknown/missing→fallback approved + warn (handled in postback.js).
+  // convId: transaction_id primary; program_config_id + '_' + ml_sub1 fallback
+  //   (computed in postback.js when transaction_id is absent).
+  {
+    id: 'mylead',
+    displayName: 'MyLead',
+    detect: [
+      [{ paramEquals: { name: 'platform', value: 'mylead' } }],
+      [{ hasParam: 'ml_sub1' }],
+    ],
+    params: {
+      userId: ['ml_sub1', 'subid1', 'subid', 'aff_sub'],
+      taskId: ['ml_sub2', 'subid2', 'offer_id', 'campaign_id'],
+      convId: ['transaction_id'],
+      payout: ['payout_decimal', 'payout'],
+      status: ['status'],
+    },
+    statusMap: {
+      'approved':     'approved',
+      'pre_approved': 'approved',
+      'rejected':     'rejected',
+      '1':            'approved',
+      '0':            'rejected',
+    },
+  },
 ];
 
 export const UNIVERSAL_PARAMS = {
