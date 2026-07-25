@@ -1,0 +1,46 @@
+You are fixing the OGAds locker reward calculation so that, when a postback arrives with a payout, the completion's `reward` (user) and `adminReward` (site margin) are computed from that payout using the platform user-share percentage — exactly like normal API tasks. VERIFIED ROOT CAUSE (do not re-investigate): the settlement functions write `postbackAmount` but never compute/write `reward` & `adminReward`, so they stay at the initial 0 set at Start (which is correct at Start, since payout is unknown then). The fix belongs in the SETTLEMENT path, NOT in handleStartLocker.
+
+Reference logic that already works for API tasks (mirror it, do not reinvent):
+- src/contexts/TaskContext.tsx:279-283 computes earned via userReward(adminReward, "platform", { platformUserSharePercent: settings.platformTaskUserSharePercent }).
+- src/lib/utils.ts:72-78 userReward(); :61-70 userRevenueRate(); :46-59 adminRevenueRate(); :10 DEFAULT_PLATFORM_USER_SHARE_PERCENT = 65; :28-30 normalizePlatformUserSharePercent() returns 65 when the share is undefined.
+
+═══════════════════════════════════════════════════════════════════
+STEP 0 — DETERMINE THE FILE TOPOLOGY FIRST (this decides where you edit)
+═══════════════════════════════════════════════════════════════════
+The owner tests on Vercel, whose /api/postback endpoint is the serverless file api/postback.js (NOT server/postback/engine.ts, which is the Replit/Express path). Before editing, determine and STATE in your report which topology is true:
+  (TOPOLOGY-SHARED) api/postback.js imports its settlement functions from server/postback/engine.ts (or a shared module) — then editing the settlement functions ONCE covers both environments.
+  (TOPOLOGY-DUPLICATED) api/postback.js has its OWN copy of settleFullyVerified / settlePostbackOnly (independent of engine.ts) — then you MUST apply the identical fix in BOTH places, or Vercel (the tested env) will keep returning reward=0.
+Quote the import lines / function definitions that prove which topology holds. If DUPLICATED, keep the two copies byte-for-byte consistent in the reward logic (this repo deliberately keeps them in sync).
+
+═══════════════════════════════════════════════════════════════════
+THE FIX (apply in every settlement function that GRANTS money)
+═══════════════════════════════════════════════════════════════════
+In EACH of settleFullyVerified and settlePostbackOnly (in engine.ts AND, if TOPOLOGY-DUPLICATED, in api/postback.js / its helper module), at the point where the completion is updated to a verified/settled status and postbackAmount is written, ALSO compute and write reward & adminReward from the parsed payout:
+
+  1. total = parsed.payout (the value already stored as postbackAmount; guard: if not a finite number > 0, treat as 0).
+  2. Resolve the effective user share the SAME way API tasks do: read settings.platformTaskUserSharePercent (use the same settings source the rest of the server code uses — e.g. the existing getSettings()/settings doc read; if no server-side settings read exists yet, read the settings doc the same way the client/TaskContext does, OR fall back to the default below). Pass it through the same normalize function so that undefined -> 65.
+  3. userEarned = the same computation as userReward(total, "platform", { platformUserSharePercent }) — PREFER importing/reusing userReward from src/lib/utils so the formula (including any rounding in userRevenueRate/adminRevenueRate) is IDENTICAL to API tasks. If that import is impossible in a given file/env (path/alias/build constraints), re-implement the EXACT formula inline by copying utils.ts logic (do not invent a different formula), and add a comment noting it must stay in sync with utils.ts.
+  4. siteMargin = total - userEarned.
+  5. In the same update/transaction that sets the verified/settled status and postbackAmount, set: reward = userEarned, adminReward = siteMargin. (Use the same field names the doc already has: reward and adminReward.)
+
+ROBUSTNESS (important): because normalize returns 65 when the share is missing, even if the settings read fails the result must be reward = total*0.65 and adminReward = total*0.35 — NEVER leave reward at 0 when total > 0. Add a one-line console.log in the settlement path printing total, effectiveShare, userEarned, siteMargin so the owner can see it in Vercel/Replit logs.
+
+DO NOT touch settleRejected / settleRejectedWithReversal (rejections pay nothing — reward must stay 0 there).
+
+═══════════════════════════════════════════════════════════════════
+CONSTRAINTS
+═══════════════════════════════════════════════════════════════════
+- Do NOT change handleStartLocker in TasksPage.tsx — reward=0 at Start is CORRECT (payout unknown). Do NOT touch the parser, adapters, Firestore rules, the API offer-import flow, the admin locker form, or any UI.
+- Do NOT change status transitions or the lifecycle (started -> postback_verified -> platform_approved must stay exactly as is).
+- Keep API tasks behaving exactly as today (you are only ADDING the missing computation on the locker/postback settlement path; the API path already computes reward elsewhere — do not double-apply; verify you are editing the postback-settlement update, not the Start creation).
+- Run the type check / build; confirm ZERO TypeScript errors. If an import path for userReward/settings does not resolve in a file, fix the path or use the inline fallback — do not leave a broken import.
+
+═══════════════════════════════════════════════════════════════════
+FINAL REPORT (mandatory)
+═══════════════════════════════════════════════════════════════════
+1. The topology you found (SHARED or DUPLICATED) with the import/definition lines as proof, and the exact list of files you edited.
+2. For each edited settlement function: the exact lines added (reward/adminReward computation) and confirmation it reuses userReward or an identical inline formula.
+3. Confirmation that settleRejected* were NOT touched.
+4. The expected numbers for payout=0.8 with the default 65% share: reward=0.52, adminReward=0.28 — state these so the owner can verify against Firestore.
+5. Confirmation the build passed with zero errors.
+6. The exact verification the owner must run (see below) — include the reminder to use a FRESH started doc and a NEW offer_id to avoid the dedup key, and to copy aff_sub2 with the copy-button (a prior I/l visual typo caused a false "skipped").

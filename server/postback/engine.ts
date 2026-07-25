@@ -16,6 +16,7 @@
 import * as admin from "firebase-admin";
 import { db } from "../firebase-admin";
 import { parsePostback, type ParsedConversion } from "./parser";
+import { userReward, normalizePlatformUserSharePercent } from "../../src/lib/utils";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public types
@@ -62,6 +63,18 @@ async function getPostbackSecret(): Promise<string> {
     return "";
   } catch {
     return "";
+  }
+}
+
+async function getSharePercent(): Promise<number> {
+  if (!db) return 65;
+  try {
+    const snap = await db.collection("settings").doc("general").get();
+    if (!snap.exists) return 65;
+    const pct = (snap.data() as Record<string, unknown>)?.platformTaskUserSharePercent;
+    return normalizePlatformUserSharePercent(typeof pct === "number" ? pct : undefined);
+  } catch {
+    return 65;
   }
 }
 
@@ -265,6 +278,11 @@ async function settleFullyVerified(
 ): Promise<void> {
   if (!db || !completionId) return;
   try {
+    const sharePercent = await getSharePercent();
+    const total = (typeof parsed.payout === "number" && Number.isFinite(parsed.payout) && parsed.payout > 0) ? parsed.payout : 0;
+    const userEarned = userReward(total, "platform", { platformUserSharePercent: sharePercent });
+    const siteMargin = total - userEarned;
+    console.log(`[engine] 💰 settleFullyVerified reward: total=${total} share=${sharePercent}% userEarned=${userEarned} siteMargin=${siteMargin}`);
     await db.collection("taskCompletions").doc(completionId).update({
       status: "platform_approved",
       verifiedBy: parsed.platformId,
@@ -273,6 +291,8 @@ async function settleFullyVerified(
       platformName: parsed.displayName,
       postbackConvId: parsed.convId,
       postbackAmount: parsed.payout,
+      reward: userEarned,
+      adminReward: siteMargin,
     });
     console.log(`[engine] ✅ fully verified → platform_approved | completion=${completionId}`);
   } catch (err) {
@@ -290,6 +310,11 @@ async function settlePostbackOnly(
 ): Promise<void> {
   if (!db || !completionId) return;
   try {
+    const sharePercent = await getSharePercent();
+    const total = (typeof parsed.payout === "number" && Number.isFinite(parsed.payout) && parsed.payout > 0) ? parsed.payout : 0;
+    const userEarned = userReward(total, "platform", { platformUserSharePercent: sharePercent });
+    const siteMargin = total - userEarned;
+    console.log(`[engine] 💰 settlePostbackOnly reward: total=${total} share=${sharePercent}% userEarned=${userEarned} siteMargin=${siteMargin}`);
     await db.collection("taskCompletions").doc(completionId).update({
       status: "postback_verified",
       verifiedBy: parsed.platformId,
@@ -298,6 +323,8 @@ async function settlePostbackOnly(
       platformName: parsed.displayName,
       postbackConvId: parsed.convId,
       postbackAmount: parsed.payout,
+      reward: userEarned,
+      adminReward: siteMargin,
     });
     console.log(`[engine] 📦 postback stored → postback_verified | completion=${completionId} (awaiting user confirmation)`);
   } catch (err) {

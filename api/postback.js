@@ -317,10 +317,36 @@ async function findActiveCompletion(db, userId, taskId) {
   }
 }
 
+// ── Reward computation helpers ─────────────────────────────────────────────────
+// Mirrors src/lib/utils.ts: normalizePlatformUserSharePercent + userReward.
+// MUST stay in sync with that file if the formula changes.
+function normalizePlatformShare(pct) {
+  if (typeof pct !== 'number' || Number.isNaN(pct)) return 65;
+  return Math.max(0, Math.min(100, pct));
+}
+function computeUserReward(total, sharePercent) {
+  return total * (normalizePlatformShare(sharePercent) / 100);
+}
+async function loadSharePercent(db) {
+  try {
+    const snap = await db.collection('settings').doc('general').get();
+    if (!snap.exists) return 65;
+    const pct = snap.data()?.platformTaskUserSharePercent;
+    return normalizePlatformShare(typeof pct === 'number' ? pct : undefined);
+  } catch {
+    return 65;
+  }
+}
+
 // ── Settlement helpers ────────────────────────────────────────────────────────
 
 async function settleFullyVerified(db, completionId, platformId, displayName, convId, payout) {
   try {
+    const sharePercent = await loadSharePercent(db);
+    const total = (typeof payout === 'number' && Number.isFinite(payout) && payout > 0) ? payout : 0;
+    const userEarned = computeUserReward(total, sharePercent);
+    const siteMargin = total - userEarned;
+    console.log(`[postback] 💰 settleFullyVerified reward: total=${total} share=${sharePercent}% userEarned=${userEarned} siteMargin=${siteMargin}`);
     await db.collection('taskCompletions').doc(completionId).update({
       status: 'platform_approved',
       verifiedBy: platformId,
@@ -329,6 +355,8 @@ async function settleFullyVerified(db, completionId, platformId, displayName, co
       platformName: displayName,
       postbackConvId: convId,
       postbackAmount: payout,
+      reward: userEarned,
+      adminReward: siteMargin,
     });
   } catch (e) {
     console.error('[postback] ❌ settleFullyVerified failed:', e.message);
@@ -337,6 +365,11 @@ async function settleFullyVerified(db, completionId, platformId, displayName, co
 
 async function settlePostbackOnly(db, completionId, platformId, displayName, convId, payout) {
   try {
+    const sharePercent = await loadSharePercent(db);
+    const total = (typeof payout === 'number' && Number.isFinite(payout) && payout > 0) ? payout : 0;
+    const userEarned = computeUserReward(total, sharePercent);
+    const siteMargin = total - userEarned;
+    console.log(`[postback] 💰 settlePostbackOnly reward: total=${total} share=${sharePercent}% userEarned=${userEarned} siteMargin=${siteMargin}`);
     await db.collection('taskCompletions').doc(completionId).update({
       status: 'postback_verified',
       verifiedBy: platformId,
@@ -345,6 +378,8 @@ async function settlePostbackOnly(db, completionId, platformId, displayName, con
       platformName: displayName,
       postbackConvId: convId,
       postbackAmount: payout,
+      reward: userEarned,
+      adminReward: siteMargin,
     });
   } catch (e) {
     console.error('[postback] ❌ settlePostbackOnly failed:', e.message);
