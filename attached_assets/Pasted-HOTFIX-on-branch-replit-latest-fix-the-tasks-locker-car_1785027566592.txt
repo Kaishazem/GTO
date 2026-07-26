@@ -1,0 +1,26 @@
+HOTFIX on branch replit-latest — fix the /tasks locker card so an embed (MyLead) locker shows a working "Start" button even though directUrl is empty. You (Replit Agent) are the ONLY tool allowed to modify code. Start with `git pull origin replit-latest`.
+
+VERIFIED FROM FIRESTORE (ground truth — the doc is correct, do NOT change it):
+lockers/<docId> for "GTO MyLead" has: platform="mylead", integrationMode="embed", embedId="96783d6a-886e-11f1-8711-129a1c289511", active=true, directUrl="", lockerId="", type="content". So the SAVE (part 3) is correct. The bug is purely in how /tasks RENDERS the card.
+
+INSPECT & QUOTE (briefly):
+1. In src/pages/TasksPage.tsx: the JSX that renders each locker card in the "Content Lockers" list — specifically the condition that decides between the enabled "Start" button and the disabled "No URL" button. Quote it.
+2. Quote how the Start button's action is wired (onClick -> handleStartLocker? or an <a href>?).
+3. Confirm the /locker-embed/:id route + component exist (created in part 2). Quote the route definition AND the line where that page reads the doc id from the URL and reads locker.embedId. We need to prove the id the button passes == the id the page expects.
+
+THE BUG: the card treats empty directUrl/lockerId as "no link" and disables the button. But embed lockers have NO directUrl by design — they must open the embedded iframe page (/locker-embed/<docId>) instead.
+
+THE FIX (minimal, one file expected):
+- In the card button logic, add an embed branch BEFORE the "No URL" fallback:
+    if (locker.integrationMode === "embed" && locker.embedId) -> render an ENABLED "Start" button that navigates to `/locker-embed/${locker.<docId>}` (use the Firestore document id — the same id the /locker-embed page reads to load the doc). This branch must NOT require directUrl/lockerId.
+    else (redirect lockers: ogads/adscend) -> keep today's logic byte-for-byte (Start enabled only when directUrl/lockerId present, else "No URL").
+- Guard any "Platform Verified"/status badge logic that references directUrl so it does not crash or mislabel embed lockers.
+- If the /locker-embed route/component is MISSING entirely, STOP and report it (do not build it here) — but it should exist from part 2.
+
+CONSISTENCY CHECK (must prove, quote both sides): the id you put in the route (`/locker-embed/<X>`) must equal what the /locker-embed page reads from the URL to fetch the doc; and that page must then read locker.embedId from the fetched doc to build the iframe with ml_sub2=embedId. Quote the button line and the page line to prove X == doc id.
+
+CONSTRAINTS: do NOT touch the part-1 adapter, the part-2 embed page logic (only the button that links to it), the part-3 admin form, Firestore rules, the offer-import flow, the reward-split formula, or the OGAds/Adscend redirect rendering.
+
+CREDIT-SAFETY: the MOMENT `npx tsc --noEmit` passes, IMMEDIATELY run `git add -A && git commit -m "fix(lockers): show Start button for embed (MyLead) lockers without directUrl"` ; then `git push origin replit-latest` (may fail on auth -> owner pushes manually). ONLY after the commit exists locally, write the report.
+
+REPORT (concise): (a) quoted old button condition + new condition; (b) the exact Start action for embed (route + which id); (c) proof the route id matches what /locker-embed reads (quoted both sides); (d) build command + zero errors; (e) commit hash + push status (pushed / "push failed, owner will push").

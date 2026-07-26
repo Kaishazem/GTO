@@ -700,7 +700,11 @@ export default function TasksPage() {
                   lockerStatus === "started" ||
                   lockerStatus === "postback_verified";
                 const lockerStatusProps = lockerStatus ? statusBadgeProps(lockerStatus) : null;
-                const hasUrl = !!locker.directUrl;
+                // Embed lockers (MyLead) have no directUrl by design — they open
+                // /locker-embed/<docId> in-app. Treat them as "has URL" so the
+                // Start button is enabled. Redirect lockers keep the old check.
+                const isEmbedLocker = locker.integrationMode === "embed" && !!locker.embedId;
+                const hasUrl = isEmbedLocker || !!locker.directUrl;
 
                 return (
                   <div
