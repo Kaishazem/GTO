@@ -688,22 +688,31 @@ export default function TasksPage() {
           ) : (
             <div className="grid gap-4">
               {lockers.map((locker) => {
-                const lockerCompletion = completions.find((c) => c.taskId === locker.id);
+                // Embed lockers (MyLead): embedId is the taskId in completions; redirect lockers use locker.id.
+                const isEmbedLocker = locker.integrationMode === "embed" && !!locker.embedId;
+                const lockerCompletion = completions.find((c) =>
+                  isEmbedLocker ? c.taskId === locker.embedId : c.taskId === locker.id
+                );
+                // Keep raw status string for embed-specific badge (pending_approval isn't in TaskCompletionStatus)
+                const lockerRawStatus = (lockerCompletion?.status as string) || "";
                 const lockerStatus = lockerCompletion?.status as TaskCompletionStatus | undefined;
-                // postback_verified is not "done" — user still needs to click "Completed Task"
-                const isLockerDone = !!lockerStatus && lockerStatus !== "started" && lockerStatus !== "postback_verified";
+                // Redirect lockers: postback_verified needs user to click "Completed Task" — not done yet.
+                // Embed lockers: no manual step; pending_approval + started = not done; everything else = done.
+                const isLockerDone = isEmbedLocker
+                  ? (!!lockerRawStatus && lockerRawStatus !== "started" && lockerRawStatus !== "pending_approval")
+                  : (!!lockerStatus && lockerStatus !== "started" && lockerStatus !== "postback_verified");
                 const isLockerStarting = startingLocker === locker.id;
                 const isLockerCompleting = completingLocker === locker.id;
                 const isLockerOpened = openedLockers.has(locker.id);
+                // lockerCanConfirm drives the "Completed Task" button — NEVER shown for embed lockers
+                // (embed completion comes only from the MyLead postback; there is no manual step).
                 const lockerCanConfirm =
-                  isLockerOpened ||
-                  lockerStatus === "started" ||
-                  lockerStatus === "postback_verified";
+                  !isEmbedLocker && (
+                    isLockerOpened ||
+                    lockerStatus === "started" ||
+                    lockerStatus === "postback_verified"
+                  );
                 const lockerStatusProps = lockerStatus ? statusBadgeProps(lockerStatus) : null;
-                // Embed lockers (MyLead) have no directUrl by design — they open
-                // /locker-embed/<docId> in-app. Treat them as "has URL" so the
-                // Start button is enabled. Redirect lockers keep the old check.
-                const isEmbedLocker = locker.integrationMode === "embed" && !!locker.embedId;
                 const hasUrl = isEmbedLocker || !!locker.directUrl;
 
                 return (
@@ -735,7 +744,8 @@ export default function TasksPage() {
                           )}
                         </div>
                         <h3 className="font-semibold text-white text-base mb-1">{locker.name}</h3>
-                        {lockerStatus === "postback_verified" && (
+                        {/* Only redirect lockers have a manual "Completed Task" step */}
+                        {!isEmbedLocker && lockerStatus === "postback_verified" && (
                           <p className="text-xs text-sky-400 mt-1 font-medium">
                             ✔ Platform verified — click "Completed Task" to claim your reward
                           </p>
@@ -768,6 +778,7 @@ export default function TasksPage() {
                             )}
                           </Button>
 
+                          {/* Redirect lockers only: manual "Completed Task" button */}
                           {lockerCanConfirm && (
                             <Button
                               size="sm"
@@ -786,6 +797,17 @@ export default function TasksPage() {
                                 <><CheckCircle className="w-4 h-4 mr-1" />Completed Task</>
                               )}
                             </Button>
+                          )}
+                          {/* Embed lockers only: postback status badge replaces manual button */}
+                          {isEmbedLocker && lockerRawStatus === "started" && (
+                            <span className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full border bg-blue-500/20 text-blue-300 border-blue-500/30">
+                              <Clock className="w-3 h-3" />In Progress
+                            </span>
+                          )}
+                          {isEmbedLocker && lockerRawStatus === "pending_approval" && (
+                            <span className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full border bg-amber-500/20 text-amber-300 border-amber-500/30">
+                              <Clock className="w-3 h-3" />Pending verification
+                            </span>
                           )}
                         </div>
                       )}

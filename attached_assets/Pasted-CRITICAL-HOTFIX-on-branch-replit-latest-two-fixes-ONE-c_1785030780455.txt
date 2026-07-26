@@ -1,0 +1,64 @@
+CRITICAL HOTFIX on branch replit-latest — two fixes, ONE commit. You (Replit Agent) are the ONLY tool allowed to modify code. Start with `git pull origin replit-latest`.
+
+═══════════════════════════════════════════════════════════
+FIX #1 (CRITICAL — production money is at stake) — pending→approved upgrade
+═══════════════════════════════════════════════════════════
+PROBLEM (verified by reading the code): in api/postback.js AND server/postback/engine.ts the dedup check runs BEFORE the MyLead pending/approved logic. The dedup key for MyLead is `mylead_<transaction_id>`. In production MyLead sends status=pending FIRST (we store a postbackConversions doc with that dedupKey + status 'pending_approval'), THEN status=approved LATER with the SAME transaction_id. When the approved postback arrives, the dedup check sees the existing pending doc and returns 'duplicate' — so the approved postback is NEVER settled and the user is NEVER paid. This zeroes out all real earnings. The curl test only passed because we sent approved directly with no prior pending.
+
+REQUIRED CHANGE (apply IDENTICALLY in api/postback.js AND server/postback/engine.ts — keep the duplicated topology in sync):
+Turn the absolute duplicate rejection into an UPGRADE-AWARE check. Pseudocode of the new logic at the dedup point:
+
+  const existing = await <read postbackConversions.doc(dedupKey)>;
+  if (existing && existing.exists) {
+    const prev = (existing.data()?.status || '').toString();
+    const rawSt = (rawParams.status || parsed.rawParams.status || '').toLowerCase().trim();
+    const incomingIsApproval = (platformId/parsed.platformId === 'mylead') && (rawSt === 'approved' || rawSt === 'pre_approved');
+    const prevIsPending = (prev === 'pending_approval' || prev === 'pending');
+
+    if (prevIsPending && incomingIsApproval) {
+      // ── UPGRADE PATH: pending -> approved ──
+      console.log('[mylead] ⬆ upgrading pending -> approved, settling now');
+      // 1) find the active completion (same userId/taskId as stored) and run the SAME settlement logic the normal approved path uses (compute reward/adminReward via the existing reward-split formula; advance the taskCompletions doc to the verified/settled state; write wallet transaction if the approved path does). Reuse the exact settle function the approved path calls — do NOT reinvent the formula.
+      // 2) UPDATE the existing postbackConversions doc (dedupKey) in place (use set with {merge:true} or update() — do NOT fail because it already exists): set status='settled' (or 'approved'), amount=payout, plus platformVerifiedAt/verifiedBy='mylead' and any fields the normal approved path writes.
+      // 3) writeLog('upgraded', 'MyLead pending upgraded to approved and settled', ...).
+      // 4) return a success result with status 'settled' (mirror the normal approved return shape).
+      // IMPORTANT: do NOT fall through to the normal approved path afterwards (it would re-hit dedup/writeConversion and may collide). Do the settlement right here and return.
+    } else {
+      // genuine duplicate (already settled/approved/rejected, or a non-upgrade repeat)
+      console.log('[postback] ↩ REJECTED — duplicate:', dedupKey);
+      ... existing duplicate return, unchanged ...
+    }
+  }
+
+Keep the existing MyLead pending branch (status==='pending' -> write 'pending_approval', no pay) EXACTLY as is. Keep the normal approved path exactly as is for the case where there is NO existing doc (first-time approved, e.g. networks that send approved only). Only the dedup branch changes.
+
+CONSTRAINTS for FIX #1: do NOT change the reward-split formula, the dedupKey formula, the macros/adapter, the secret check, OGAds/Adscend behavior, or Firestore rules. The upgrade must reuse the existing settle function so reward/adminReward stay consistent (30/70 or whatever is configured — do not hardcode a ratio).
+
+═══════════════════════════════════════════════════════════
+FIX #2 (UX) — hide the manual "Completed Task" button for embed lockers; show real status
+═══════════════════════════════════════════════════════════
+PROBLEM: in src/pages/TasksPage.tsx the locker card renders a manual "Completed Task" button for content lockers. For an embed locker (integrationMode==='embed') completion comes ONLY from the postback, so that button is meaningless; clicking it looks up a manual task by the locker id, finds none, and shows the red toast "Task not found".
+
+REQUIRED CHANGE (TasksPage.tsx only):
+- For a locker with integrationMode === 'embed': do NOT render the manual "Completed Task" button (nor any manual "View Details"/submit affordance that targets the manual `tasks` collection). Render ONLY the "Start" button (which opens /locker-embed/:id).
+- Additionally, reflect the REAL completion state for that user on the embed card: look up the current user's taskCompletions doc for this locker (same lookup the card already does for OGAds, if any; otherwise query taskCompletions where userId==uid && taskId==locker.embedId && platformId=='mylead', latest). Show a status badge instead of the manual button:
+    * no doc            -> (nothing extra; just Start)
+    * status 'started'  -> badge "In Progress"
+    * status 'pending_approval' -> badge "Pending verification"
+    * status 'postback_verified' / 'settled' / 'approved' -> badge "Completed ✓"
+    * status 'rejected' -> badge "Not approved"
+  If reading the completion state per-card is too heavy/complex right now, the MINIMUM acceptable fix is: hide the manual Completed Task button for embed lockers (so the red error can never happen); the status badge is a nice-to-have. State clearly which you implemented.
+- Do NOT change OGAds/Adscend card rendering (their manual button, if any, stays as today).
+
+═══════════════════════════════════════════════════════════
+CREDIT-SAFETY + BUILD + COMMIT
+═══════════════════════════════════════════════════════════
+Edit one file at a time, finish each compilable. The MOMENT `npx tsc --noEmit` passes, IMMEDIATELY run:
+  git add -A && git commit -m "fix(mylead): upgrade pending->approved (dedup-aware) + hide manual complete btn for embed"
+Then `git push origin replit-latest` (may fail on auth -> owner pushes manually). ONLY after the commit exists locally, write the report.
+
+REPORT (concise):
+(a) FIX#1: quote the OLD dedup branch and the NEW upgrade-aware branch in BOTH files; name the exact settle function you reused for the upgrade; confirm the existing conv doc is updated in place (merge/update) not recreated.
+(b) FIX#2: quote the card change; state whether you implemented the status badge or only hid the button.
+(c) build command + zero errors; (d) commit hash + push status.
+(e) Owner verification (give exact curls): after push+Vercel Ready, the owner will (1) create a fresh started doc via Start on GTO MyLead, (2) send a PENDING postback with a NEW transaction_id (e.g. TESTML_PEND_<ts>) + the password -> expect postback_stored + a postbackConversions doc status pending_approval + reward still 0, (3) send an APPROVED postback with the SAME transaction_id + password -> expect status 'settled' (NOT 'duplicate') + reward computed (e.g. 0.24 for 0.80 at 30%). Quote the two curls with placeholders.

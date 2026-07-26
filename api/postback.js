@@ -226,6 +226,47 @@ export default async function handler(req, res) {
     existing = null;
   }
   if (existing && existing.exists) {
+    const prev = (existing.data()?.status || '').toString();
+    const rawSt = (rawParams.status || '').toLowerCase().trim();
+    const incomingIsApproval = platformId === 'mylead' && (rawSt === 'approved' || rawSt === 'pre_approved');
+    const prevIsPending = prev === 'pending_approval' || prev === 'pending';
+
+    if (prevIsPending && incomingIsApproval) {
+      // ── UPGRADE PATH: pending → approved ──────────────────────────────────
+      // MyLead sends status=pending first (stored as pending_approval), then
+      // status=approved with the same transaction_id. Without this branch the
+      // dedup check would reject the approved postback as a duplicate and the
+      // user would never be paid.
+      console.log('[mylead] ⬆ upgrading pending -> approved, settling now');
+      const upgradeCompletion = (userId && taskId) ? await findActiveCompletion(db, userId, taskId) : null;
+      if (upgradeCompletion) {
+        // Reuse the same settle functions the normal approved path uses so that
+        // reward/adminReward stay consistent (configured share % from settings).
+        if (upgradeCompletion.status === 'user_confirmed' || upgradeCompletion.status === 'platform_pending') {
+          await settleFullyVerified(db, upgradeCompletion.id, platformId, displayName, convId, payout);
+        } else {
+          await settlePostbackOnly(db, upgradeCompletion.id, platformId, displayName, convId, payout);
+        }
+      }
+      // Update the existing postbackConversions doc IN PLACE (merge: true keeps all
+      // original fields; we only overwrite status + amount + completionId + timestamps).
+      await db.collection('postbackConversions').doc(dedupKey).set({
+        status: 'settled',
+        amount: payout,
+        completionId: upgradeCompletion?.id || existing.data()?.completionId || '',
+        processedAt: new Date().toISOString(),
+        processingMs: Date.now() - startTime,
+      }, { merge: true });
+      await writeLog(db, 'upgraded', 'MyLead pending upgraded to approved and settled', parsed, upgradeCompletion?.id || '', Date.now() - startTime, receivedAt);
+      return res.status(200).json({
+        received: true, status: 'settled', platformId, userId, taskId,
+        completionId: upgradeCompletion?.id || null, payout,
+        processingMs: Date.now() - startTime,
+        message: 'MyLead pending upgraded to approved and settled',
+      });
+    }
+
+    // genuine duplicate (already settled/approved/rejected, or a non-upgrade repeat)
     console.log('[postback] ↩ REJECTED — duplicate:', dedupKey);
     await writeLog(db, 'duplicate', 'Duplicate conversion — already processed', parsed, existing.data()?.completionId || '', Date.now() - startTime, receivedAt);
     return res.status(200).json({
