@@ -17,6 +17,7 @@ import AdminPage from "@/pages/AdminPage";
 import AdminUsersPage from "@/pages/AdminUsersPage";
 import ProfilePage from "@/pages/ProfilePage";
 import NotFound from "@/pages/not-found";
+import LockerEmbedPage from "@/pages/LockerEmbedPage";
 import { Loader2, ShieldX } from "lucide-react";
 
 const queryClient = new QueryClient({
@@ -160,6 +161,10 @@ function AppRoutes() {
       <Route
         path="/admin/users"
         component={() => <ProtectedRoute component={AdminUsersPage} adminOnly />}
+      />
+      <Route
+        path="/locker-embed/:lockerId"
+        component={() => <ProtectedRoute component={LockerEmbedPage} />}
       />
       <Route component={NotFound} />
     </Switch>

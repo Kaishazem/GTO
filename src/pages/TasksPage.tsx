@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useLocation } from "wouter";
 import {
   collection,
   getDocs,
@@ -60,6 +61,12 @@ interface Locker {
   notes?: string;
   active: boolean;
   createdAt: Date;
+  /** "redirect" (default / undefined) keeps existing OGAds behavior.
+   *  "embed" renders the locker in an in-app iframe (used by MyLead). */
+  integrationMode?: "redirect" | "embed";
+  /** The MyLead embed id (e.g. 96783d6a-886e-11f1-8711-129a1c289511).
+   *  Used as both the iframe path segment AND as ml_sub2 / taskId. */
+  embedId?: string;
 }
 type ActivityFilter = "all" | "pending" | "approved" | "rejected";
 
@@ -154,6 +161,7 @@ export default function TasksPage() {
   const { tasks, completions, startTask, completeTask, hasMore, loadMoreTasks, loadingMore, loading } = useTask();
   const { profile } = useAuth();
   const { toast } = useToast();
+  const [, navigate] = useLocation();
   const [tab, setTab] = useState<MainTab>("all");
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>("all");
   const [completing, setCompleting] = useState<string | null>(null);
@@ -197,6 +205,8 @@ export default function TasksPage() {
             notes: data.notes ?? undefined,
             active: data.active ?? true,
             createdAt: (data.createdAt as Timestamp)?.toDate() ?? new Date(),
+            integrationMode: (data.integrationMode as "redirect" | "embed") ?? undefined,
+            embedId: data.embedId ?? undefined,
           };
         });
         // Sort newest first
@@ -302,30 +312,42 @@ export default function TasksPage() {
   }
 
   // ── Locker start handler ───────────────────────────────────────────────────
-  // Stable task identifier: the locker's Firestore doc ID.
-  // This same value is stored as taskId in taskCompletions AND passed as aff_sub2
-  // in the click URL so the existing postback engine can match them.
+  // Stable task identifier for redirect lockers: the locker's Firestore doc ID.
+  // For embed (MyLead) lockers: the embedId IS the taskId — it is stored on the
+  // started doc AND injected as ml_sub2 so the part-1 adapter can match it.
   async function handleStartLocker(locker: Locker) {
     const uid = profile?.uid ?? "";
     if (!uid) {
       toast({ title: "Not logged in", variant: "destructive" });
       return;
     }
-    if (!locker.directUrl) {
-      toast({ title: "No URL configured for this locker", variant: "destructive" });
-      return;
+
+    const isEmbed = locker.integrationMode === "embed";
+
+    if (isEmbed) {
+      // embed mode (MyLead): embedId is required
+      if (!locker.embedId) {
+        toast({ title: "No embed ID configured for this locker", variant: "destructive" });
+        return;
+      }
+    } else {
+      // redirect mode (OGAds, default): directUrl is required
+      if (!locker.directUrl) {
+        toast({ title: "No URL configured for this locker", variant: "destructive" });
+        return;
+      }
     }
 
-    // taskId = the locker Firestore doc ID (stable, unique per locker)
-    const taskId = locker.id;
-    // Build tracking URL using OGAds strategy: aff_sub=userId, aff_sub2=taskId
-    const finalUrl = buildTrackingUrl(locker.directUrl, taskId, uid, "ogads");
+    // For embed mode, taskId = embedId so ml_sub2 === taskId === completion doc key.
+    // For redirect mode, taskId = locker Firestore doc ID (existing behavior).
+    const taskId = isEmbed ? locker.embedId! : locker.id;
 
-    // Open blank tab synchronously inside the user-gesture frame
-    const newTab = window.open("about:blank", "_blank");
+    // For redirect mode: open a blank tab synchronously inside the user-gesture frame.
+    const newTab = isEmbed ? null : window.open("about:blank", "_blank");
 
     setStartingLocker(locker.id);
     try {
+      // The completion doc key is always uid_taskId — deterministic, one per (user, locker).
       const docId = `${uid}_${taskId}`;
       const completionRef = doc(db, "taskCompletions", docId);
       await runTransaction(db, async (tx) => {
@@ -342,9 +364,10 @@ export default function TasksPage() {
           taskTitle: locker.name,
           taskDescription: `Content Locker — ${locker.type}`,
           taskType: "platform",
-          taskPlatform: "ogads",
-          platformId: "ogads",
-          importedFrom: "ogads",
+          // Platform identifiers vary by integration mode:
+          taskPlatform: isEmbed ? "mylead" : "ogads",
+          platformId: isEmbed ? "mylead" : "ogads",
+          importedFrom: isEmbed ? "mylead" : "ogads",
           sourceType: "locker",
           manualAdminRate: null,
           manualUserSharePercent: null,
@@ -363,10 +386,17 @@ export default function TasksPage() {
       setStartingLocker(null);
     }
 
-    if (newTab) {
-      newTab.location.href = finalUrl;
+    if (isEmbed) {
+      // Navigate in-app; the embed page reads uid + embedId from the locker doc.
+      navigate(`/locker-embed/${locker.id}`);
     } else {
-      window.open(finalUrl, "_blank");
+      // Redirect mode: send the pre-opened tab to the tracking URL.
+      const finalUrl = buildTrackingUrl(locker.directUrl, taskId, uid, "ogads");
+      if (newTab) {
+        newTab.location.href = finalUrl;
+      } else {
+        window.open(finalUrl, "_blank");
+      }
     }
 
     const next = new Set(openedLockers);

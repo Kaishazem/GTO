@@ -1,0 +1,16 @@
+PART 2 of 4 — MyLead integration on branch replit-latest. Start with `git pull origin replit-latest` (part 1 already pushed the mylead adapter). You are the ONLY tool allowed to modify code. This part adds the FRONTEND embed mode + the embed page. Do NOT touch the adapter (done), rules, offer-import, OGAds/Adscend redirect flow.
+
+FIXED FACTS: embed id = 96783d6a-886e-11f1-8711-129a1c289511 ; ML_SUB1=uid ; ML_SUB2=taskId=embed id ; platformId="mylead". iframe base = https://clickanlook.space/iframe/<EMBED_ID> ; script loader = https://clickanlook.space/iframeLoader/<EMBED_ID>.
+
+INSPECT & QUOTE: src/pages/TasksPage.tsx handleStartLocker (the buildTrackingUrl + open lines) and the create-only-if-absent transaction that writes the started doc (taskId, userId, platform identifiers). Quote them.
+
+CHANGES:
+1. Add per-locker field integrationMode ("redirect" default for missing/undefined -> backward compatible; "embed" for mylead). Keep existing `platform` field; mylead => platform="mylead" + integrationMode="embed".
+2. In handleStartLocker: KEEP the existing create-only-if-absent transaction UNCHANGED in timing (doc with status "started", taskId = the embed id / deterministic completion key, userId = uid, platform identifiers = "mylead" must exist BEFORE the iframe loads). THEN branch:
+   - redirect: today's behavior unchanged.
+   - embed: navigate to / render a new route/component /locker-embed/:lockerId that (a) reads uid + embed id, (b) renders the MyLead iframe with ml_sub1=uid & ml_sub2=<embed id> injected as query params on the iframe URL (default; if the script-loader form is required, document why), reading the embed id from the locker doc (new field locker.embedId, or reuse directUrl to hold the iframe base) — do NOT hardcode the id in the component, (c) responsive full-cover container (works mobile AND desktop; site is responsive), (d) a visible back/close affordance returning to /tasks.
+3. Ensure the taskId stored on the started doc EXACTLY equals the value injected as ml_sub2 (the embed id), so the part-1 adapter matches it.
+
+CONSTRAINTS: do NOT touch the adapter, rules, offer-import, reward-split, OGAds/Adscend. Build / `npx tsc --noEmit` until ZERO errors (run it). Then: git add -A ; git commit -m "feat(mylead): add embed integration mode + /locker-embed page (part 2/4)" ; git push origin replit-latest.
+
+REPORT: (a) quoted handleStartLocker lines; (b) the embed branch + new route/component file + how ml_sub1/ml_sub2 are injected and why; (c) confirmation taskId==embed id==ml_sub2; (d) build command + zero errors; (e) commit hash + pushed. Stop here — do NOT touch the admin form.
