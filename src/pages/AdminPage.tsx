@@ -431,6 +431,12 @@ export default function AdminPage() {
     notes: string;
     active: boolean;
     createdAt?: Timestamp;
+    /** "ogads" | "adscend" | "mylead" — defaults to "ogads" for pre-existing docs */
+    platform?: string;
+    /** "redirect" (ogads/adscend) | "embed" (mylead) — defaults to "redirect" */
+    integrationMode?: "redirect" | "embed";
+    /** MyLead embed UUID — used as iframe path segment AND as ml_sub2 / taskId */
+    embedId?: string;
   };
 
   const BLANK_LOCKER_FORM = {
@@ -440,6 +446,9 @@ export default function AdminPage() {
     directUrl: "",
     embedCode: "",
     notes: "",
+    platform: "ogads",
+    integrationMode: "redirect" as "redirect" | "embed",
+    embedId: "",
   };
 
   const [lockers, setLockers] = useState<LockerConfig[]>([]);
@@ -1441,20 +1450,31 @@ export default function AdminPage() {
       toast({ title: "Name required", description: "Give this locker a display name.", variant: "destructive" });
       return;
     }
-    if (!lockerForm.directUrl.trim() && !lockerForm.lockerId.trim()) {
+    const isMyLead = lockerForm.platform === "mylead";
+    if (isMyLead && !lockerForm.embedId.trim()) {
+      toast({ title: "Embed ID required", description: "Paste the MyLead embed ID for this locker.", variant: "destructive" });
+      return;
+    }
+    if (!isMyLead && !lockerForm.directUrl.trim() && !lockerForm.lockerId.trim()) {
       toast({ title: "URL or ID required", description: "Enter at least a Direct URL or Locker ID.", variant: "destructive" });
       return;
     }
     setSavingLocker(true);
     try {
       const payload = {
-        name:      lockerForm.name.trim(),
-        type:      lockerForm.type,
-        lockerId:  lockerForm.lockerId.trim(),
-        directUrl: lockerForm.directUrl.trim(),
-        embedCode: lockerForm.embedCode.trim(),
-        notes:     lockerForm.notes.trim(),
-        active:    true,
+        name:            lockerForm.name.trim(),
+        type:            lockerForm.type,
+        lockerId:        lockerForm.lockerId.trim(),
+        directUrl:       lockerForm.directUrl.trim(),
+        embedCode:       lockerForm.embedCode.trim(),
+        notes:           lockerForm.notes.trim(),
+        active:          true,
+        // Platform + integration mode — persisted so TasksPage and the postback
+        // adapter can branch on them. Old docs without these fields default to
+        // ogads/redirect everywhere (backward compatible, no migration needed).
+        platform:        lockerForm.platform || "ogads",
+        integrationMode: lockerForm.integrationMode || "redirect",
+        embedId:         lockerForm.embedId.trim(),
       };
       if (editingLockerId) {
         await updateDoc(doc(db, "lockers", editingLockerId), payload);
@@ -4470,41 +4490,97 @@ export default function AdminPage() {
                     </div>
                   </div>
 
-                  {/* Locker ID + Direct URL row */}
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1.5">
-                      <label className="text-xs text-white/50">Locker ID</label>
-                      <Input
-                        placeholder="e.g. qkpro3"
-                        value={lockerForm.lockerId}
-                        onChange={(e) => setLockerForm((f) => ({ ...f, lockerId: e.target.value }))}
-                        className="bg-white/5 border-white/15 text-white placeholder:text-white/30 font-mono text-xs h-9"
-                      />
+                  {/* Platform selector */}
+                  <div className="space-y-1.5">
+                    <label className="text-xs text-white/50">Platform *</label>
+                    <div className="flex rounded-lg overflow-hidden border border-white/15 h-9">
+                      {(["ogads", "adscend", "mylead"] as const).map((p, idx) => (
+                        <button
+                          key={p}
+                          onClick={() =>
+                            setLockerForm((f) => ({
+                              ...f,
+                              platform: p,
+                              // Auto-set integrationMode: mylead → embed, others → redirect
+                              integrationMode: p === "mylead" ? "embed" : "redirect",
+                            }))
+                          }
+                          className={cn(
+                            "flex-1 text-xs font-medium transition-colors capitalize",
+                            lockerForm.platform === p
+                              ? "bg-violet-500 text-white"
+                              : "bg-white/5 text-white/40 hover:bg-white/10 hover:text-white",
+                            idx > 0 && "border-l border-white/15",
+                          )}
+                        >
+                          {p === "ogads" ? "OGAds" : p === "adscend" ? "Adscend" : "MyLead"}
+                        </button>
+                      ))}
                     </div>
-                    <div className="space-y-1.5">
-                      <label className="text-xs text-white/50">Direct URL</label>
-                      <Input
-                        placeholder="https://lockedapp.org/cl/i/qkpro3"
-                        value={lockerForm.directUrl}
-                        onChange={(e) => setLockerForm((f) => ({ ...f, directUrl: e.target.value }))}
-                        className="bg-white/5 border-white/15 text-white placeholder:text-white/30 text-xs h-9"
-                      />
-                    </div>
+                    {lockerForm.platform === "mylead" && (
+                      <p className="text-xs text-emerald-400/80 mt-1">
+                        MyLead uses an embedded offerwall — the locker opens in-app, not in a new tab.
+                      </p>
+                    )}
                   </div>
 
-                  {/* Embed code */}
-                  <div className="space-y-1.5">
-                    <label className="text-xs text-white/50 flex items-center gap-1.5">
-                      <Code className="w-3 h-3" /> Embed Code (JavaScript snippet)
-                    </label>
-                    <textarea
-                      rows={4}
-                      placeholder={"<script src=\"...\"></script>"}
-                      value={lockerForm.embedCode}
-                      onChange={(e) => setLockerForm((f) => ({ ...f, embedCode: e.target.value }))}
-                      className="w-full bg-white/5 border border-white/15 rounded-lg text-white placeholder:text-white/20 font-mono text-xs p-3 resize-none focus:outline-none focus:ring-1 focus:ring-violet-500/50"
-                    />
-                  </div>
+                  {/* MyLead Embed ID (shown only for mylead) */}
+                  {lockerForm.platform === "mylead" && (
+                    <div className="space-y-1.5">
+                      <label className="text-xs text-white/50">MyLead Embed ID *</label>
+                      <Input
+                        placeholder="e.g. 96783d6a-886e-11f1-8711-129a1c289511"
+                        value={lockerForm.embedId}
+                        onChange={(e) => setLockerForm((f) => ({ ...f, embedId: e.target.value.trim() }))}
+                        className="bg-white/5 border-white/15 text-white placeholder:text-white/30 font-mono text-xs h-9"
+                      />
+                      <p className="text-xs text-white/30">
+                        Found in your MyLead dashboard → Offerwall → iframe embed ID (UUID format).
+                        This value is stored as <span className="font-mono">locker.embedId</span>, injected as{" "}
+                        <span className="font-mono">ml_sub2</span>, and used as the completion key.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Locker ID + Direct URL row (hidden for mylead — not needed) */}
+                  {lockerForm.platform !== "mylead" && (
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <label className="text-xs text-white/50">Locker ID</label>
+                        <Input
+                          placeholder="e.g. qkpro3"
+                          value={lockerForm.lockerId}
+                          onChange={(e) => setLockerForm((f) => ({ ...f, lockerId: e.target.value }))}
+                          className="bg-white/5 border-white/15 text-white placeholder:text-white/30 font-mono text-xs h-9"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs text-white/50">Direct URL</label>
+                        <Input
+                          placeholder="https://lockedapp.org/cl/i/qkpro3"
+                          value={lockerForm.directUrl}
+                          onChange={(e) => setLockerForm((f) => ({ ...f, directUrl: e.target.value }))}
+                          className="bg-white/5 border-white/15 text-white placeholder:text-white/30 text-xs h-9"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Embed code (hidden for mylead — iframe handled by /locker-embed) */}
+                  {lockerForm.platform !== "mylead" && (
+                    <div className="space-y-1.5">
+                      <label className="text-xs text-white/50 flex items-center gap-1.5">
+                        <Code className="w-3 h-3" /> Embed Code (JavaScript snippet)
+                      </label>
+                      <textarea
+                        rows={4}
+                        placeholder={"<script src=\"...\"></script>"}
+                        value={lockerForm.embedCode}
+                        onChange={(e) => setLockerForm((f) => ({ ...f, embedCode: e.target.value }))}
+                        className="w-full bg-white/5 border border-white/15 rounded-lg text-white placeholder:text-white/20 font-mono text-xs p-3 resize-none focus:outline-none focus:ring-1 focus:ring-violet-500/50"
+                      />
+                    </div>
+                  )}
 
                   {/* Notes */}
                   <div className="space-y-1.5">
@@ -4653,12 +4729,15 @@ export default function AdminPage() {
                           onClick={() => {
                             setEditingLockerId(lk.id);
                             setLockerForm({
-                              name:      lk.name,
-                              type:      lk.type,
-                              lockerId:  lk.lockerId,
-                              directUrl: lk.directUrl,
-                              embedCode: lk.embedCode,
-                              notes:     lk.notes,
+                              name:            lk.name,
+                              type:            lk.type,
+                              lockerId:        lk.lockerId,
+                              directUrl:       lk.directUrl,
+                              embedCode:       lk.embedCode,
+                              notes:           lk.notes,
+                              platform:        lk.platform        ?? "ogads",
+                              integrationMode: lk.integrationMode ?? "redirect",
+                              embedId:         lk.embedId         ?? "",
                             });
                             setShowLockerForm(true);
                           }}
